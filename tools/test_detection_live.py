@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Standalone live YOLO object detection verification utility using MacBook webcam.
 
 Connects to the verified MacBook built-in FaceTime HD camera using the existing
