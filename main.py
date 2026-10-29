@@ -1,8 +1,8 @@
-"""Main entry point for Day 2: Adaptive Path Planning Simulation Environment.
+"""Main entry point for Day 3: Autonomous Traversal & Adaptive Replanning Environment.
 
 Sets up the Pygame rendering loop, handles interactive keyboard controls (including
-A* path computation via 'P' and reset via 'R'), coordinates the OpenCV webcam stream,
-and manages clean system shutdown.
+autonomous navigation via SPACE, dynamic hazard insertion via 'O', A* computation via 'P',
+and reset via 'R'), coordinates the OpenCV webcam stream, and manages clean system shutdown.
 """
 
 import argparse
@@ -55,9 +55,9 @@ def initialize_fonts() -> dict:
 
 
 def main() -> None:
-    """Run the Day 1 simulation loop."""
+    """Run the Day 3 simulation loop."""
     args = parse_arguments()
-    logger.info("Initializing Day 1 Adaptive Path Planning Environment...")
+    logger.info("Initializing Day 3 Autonomous Navigation & Dynamic Replanning Environment...")
 
     # Initialize Pygame core
     pygame.init()
@@ -78,7 +78,10 @@ def main() -> None:
 
     try:
         while running:
-            # 1. Event Handling
+            # 1. Cap frame rate (60 FPS) and retrieve elapsed delta time
+            dt_ms = clock.tick(60)
+
+            # 2. Event Handling
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     logger.info("Exit requested via window close button.")
@@ -89,6 +92,19 @@ def main() -> None:
                     if event.key == pygame.K_ESCAPE:
                         logger.info("Exit requested via ESC key.")
                         running = False
+
+                    # Toggle Autonomous Navigation: Start / Pause / Resume
+                    elif event.key == pygame.K_SPACE:
+                        env.toggle_autonomous_navigation()
+                        logger.info("Autonomous mode toggled: state=%s", env.nav_mode.value)
+
+                    # Dynamic obstacle insertion ahead of the vehicle
+                    elif event.key == pygame.K_o:
+                        inserted = env.insert_dynamic_obstacle(ahead_steps=3)
+                        if inserted:
+                            logger.info("Dynamic hazard inserted at coordinate: %s", inserted)
+                        else:
+                            logger.warning("Could not insert dynamic hazard: no valid cell available.")
 
                     # A* Path planning calculation
                     elif event.key == pygame.K_p:
@@ -101,7 +117,7 @@ def main() -> None:
                             result.execution_time_ms
                         )
 
-                    # Manual vehicle navigation: W/A/S/D or Arrow keys
+                    # Manual vehicle navigation: W/A/S/D or Arrow keys (active only when autonomous mode is off)
                     elif event.key in (pygame.K_w, pygame.K_UP):
                         env.move_vehicle(-1, 0)
                     elif event.key in (pygame.K_s, pygame.K_DOWN):
@@ -111,25 +127,25 @@ def main() -> None:
                     elif event.key in (pygame.K_d, pygame.K_RIGHT):
                         env.move_vehicle(0, 1)
 
-                    # Reset vehicle position and clear route
+                    # Reset vehicle position, hazards, and clear route
                     elif event.key == pygame.K_r:
                         env.reset_vehicle()
-                        logger.info("Vehicle and route reset to initial state.")
+                        logger.info("Vehicle, dynamic hazards, and route reset to initial state.")
 
                     # Toggle OpenCV webcam preview
                     elif event.key == pygame.K_c:
                         is_active = webcam.toggle_preview()
                         logger.info("Webcam toggled: active=%s (%s)", is_active, webcam.device_name)
 
-            # 2. Update Perception Feed (Non-blocking)
+            # 3. Update Autonomous Navigation & Timing
+            env.update(dt_ms)
+
+            # 4. Update Perception Feed (Non-blocking)
             webcam.update()
 
-            # 3. Render Graphics
+            # 5. Render Graphics
             env.render(screen, fonts, webcam.get_status())
             pygame.display.flip()
-
-            # 4. Cap frame rate (60 FPS)
-            clock.tick(60)
 
     except KeyboardInterrupt:
         logger.info("Simulation interrupted by user (KeyboardInterrupt).")

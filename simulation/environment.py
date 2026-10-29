@@ -4,7 +4,7 @@ Provides a 2D Pygame simulation grid featuring irregular road boundaries,
 static hazards, vehicle tracking, legend HUD, and manual keyboard testing.
 """
 
-from enum import IntEnum
+from enum import IntEnum, Enum
 from typing import List, Tuple, Set, Optional
 import math
 import numpy as np
@@ -18,6 +18,16 @@ class CellType(IntEnum):
     NON_DRIVABLE_BORDER = 0  # Off-road rough verge, rocks, ditches
     DRIVABLE_ROAD = 1        # Winding, unpaved unstructured roadway
     OBSTACLE = 2             # Static road hazard (pothole, fallen rock, debris)
+
+
+class NavigationMode(str, Enum):
+    """Operational states for vehicle navigation control."""
+    MANUAL = "Manual"
+    AUTONOMOUS = "Autonomous"
+    PAUSED = "Paused"
+    REPLANNING = "Replanning"
+    GOAL_REACHED = "Goal Reached"
+    NO_PATH = "No Path"
 
 
 class RoadEnvironment:
@@ -40,6 +50,8 @@ class RoadEnvironment:
     COLOR_VEHICLE: Tuple[int, int, int] = (33, 150, 243)       # Electric blue vehicle marker
     COLOR_DESTINATION: Tuple[int, int, int] = (255, 214, 10)   # Yellow destination goal
     COLOR_OBSTACLE: Tuple[int, int, int] = (239, 68, 68)       # Coral red obstacle marker
+    COLOR_DYNAMIC_BORDER: Tuple[int, int, int] = (251, 146, 60) # Amber-orange dynamic hazard highlight
+    COLOR_MODE_REPLANNING: Tuple[int, int, int] = (217, 70, 239) # Magenta replanning accent
     COLOR_PATH: Tuple[int, int, int] = (34, 197, 94)          # Emerald green planned path
     COLOR_PATH_ACCENT: Tuple[int, int, int] = (134, 239, 172) # Luminous light green path beads
     COLOR_PATH_LINE: Tuple[int, int, int] = (74, 222, 128)    # Route trajectory line
@@ -78,7 +90,7 @@ class RoadEnvironment:
         self.vehicle_pos: Tuple[int, int] = self.start_pos
 
         # Feedback & interaction telemetry
-        self.last_action_msg: str = "Ready. Press 'P' to compute A* route or WASD for manual movement."
+        self.last_action_msg: str = "Ready. Press SPACE to navigate, 'O' to spawn hazard, WASD for manual."
         self.last_action_status: str = "normal"  # "normal", "success", "blocked"
 
         # A* Path planning telemetry & state (Day 2)
@@ -89,6 +101,15 @@ class RoadEnvironment:
         self.path_length: int = 0
         self.explored_nodes_count: int = 0
         self.planning_time_ms: float = 0.0
+
+        # Autonomous Navigation & Dynamic Replanning state (Day 3)
+        self.nav_mode: NavigationMode = NavigationMode.MANUAL
+        self.replanning_events: int = 0
+        self.collision_count: int = 0
+        self.dynamic_obstacle_set: Set[Tuple[int, int]] = set()
+        self.initial_obstacle_coords: Set[Tuple[int, int]] = set()
+        self.step_delay_ms: int = 250  # 4 steps per second for clear visualization
+        self.step_timer_ms: int = 0
 
         # Generate unstructured road contours and obstacles
         self._build_unstructured_road()
@@ -136,28 +157,54 @@ class RoadEnvironment:
                         self.grid[r, c] = CellType.OBSTACLE
                         self.obstacle_set.add((r, c))
 
+        # Preserve the initial static obstacle baseline for clean resets
+        self.initial_obstacle_coords = set(self.obstacle_set)
+
     def reset_vehicle(self) -> None:
-        """Reset the vehicle to its designated starting position and clear previous route."""
+        """Reset vehicle, restore initial environment, clear dynamic obstacles and routes."""
+        # Remove dynamically inserted hazards from the grid
+        for r, c in self.dynamic_obstacle_set:
+            if (r, c) not in self.initial_obstacle_coords:
+                self.grid[r, c] = CellType.DRIVABLE_ROAD
+
+        # Restore static obstacle set
+        self.obstacle_set = set(self.initial_obstacle_coords)
+        for r, c in self.obstacle_set:
+            self.grid[r, c] = CellType.OBSTACLE
+
+        self.dynamic_obstacle_set.clear()
+
+        # Reset navigation & kinematics state
         self.vehicle_pos = self.start_pos
+        self.nav_mode = NavigationMode.MANUAL
         self.planned_path = []
         self.planning_result = None
         self.planning_status = "Press P to plan"
         self.path_length = 0
         self.explored_nodes_count = 0
         self.planning_time_ms = 0.0
-        self.last_action_msg = "Vehicle reset to start. Previous route cleared."
+        self.replanning_events = 0
+        self.collision_count = 0
+        self.step_timer_ms = 0
+        self.last_action_msg = "Simulation reset to initial state. Vehicle at start."
         self.last_action_status = "normal"
 
     def move_vehicle(self, d_row: int, d_col: int) -> bool:
-        """Attempt to move the vehicle by (d_row, d_col) with collision checking.
+        """Attempt manual vehicle movement with collision checking and autonomous lock.
 
         Args:
             d_row: Row offset (-1, 0, +1).
             d_col: Column offset (-1, 0, +1).
 
         Returns:
-            bool: True if move was valid and executed, False if blocked by boundary or obstacle.
+            bool: True if move was valid and executed, False if rejected or blocked.
         """
+        # Manual movement strictly rejected while autonomous mode is running
+        if self.nav_mode == NavigationMode.AUTONOMOUS:
+            self.last_action_msg = "Manual movement locked while Autonomous mode is active. Press SPACE to pause."
+            self.last_action_status = "blocked"
+            return False
+
         curr_r, curr_c = self.vehicle_pos
         target_r = curr_r + d_row
         target_c = curr_c + d_col
@@ -176,14 +223,15 @@ class RoadEnvironment:
             self.last_action_status = "blocked"
             return False
 
-        # 3. Static obstacle check
+        # 3. Static/Dynamic obstacle check
         if cell_state == CellType.OBSTACLE:
-            self.last_action_msg = f"Collision prevented: Static hazard detected at ({target_c}, {target_r})."
+            self.last_action_msg = f"Collision prevented: Hazard detected at ({target_c}, {target_r})."
             self.last_action_status = "blocked"
             return False
 
         # Valid movement executed
         self.vehicle_pos = (target_r, target_c)
+        self.nav_mode = NavigationMode.MANUAL
 
         # Clear stale path when vehicle is moved manually
         if self.planned_path:
@@ -195,10 +243,11 @@ class RoadEnvironment:
             self.planning_time_ms = 0.0
 
         if self.vehicle_pos == self.destination_pos:
+            self.nav_mode = NavigationMode.GOAL_REACHED
             self.last_action_msg = "Goal Reached! Vehicle arrived at destination marker."
             self.last_action_status = "success"
         else:
-            self.last_action_msg = f"Vehicle moved to cell ({target_c}, {target_r}). Press 'P' to plan route."
+            self.last_action_msg = f"Vehicle moved to cell ({target_c}, {target_r}). Press SPACE or 'P' to plan."
             self.last_action_status = "normal"
 
         return True
@@ -228,10 +277,258 @@ class RoadEnvironment:
         else:
             self.planned_path = []
             self.planning_status = "No valid path"
+            self.nav_mode = NavigationMode.NO_PATH
             self.last_action_msg = f"No valid path: {result.message}"
             self.last_action_status = "blocked"
 
         return result
+
+    def is_route_blocked(self) -> bool:
+        """Check if any remaining waypoint along the planned route is obstructed."""
+        if not self.planned_path or len(self.planned_path) < 2:
+            return False
+        # Inspect upcoming waypoints along remaining trajectory
+        for r, c in self.planned_path[1:]:
+            if self.grid[r, c] != CellType.DRIVABLE_ROAD:
+                return True
+        return False
+
+    def replan_route(self, reason: str = "Obstacle detected") -> bool:
+        """Recompute an optimal collision-free path from current vehicle position.
+
+        Args:
+            reason: Telemetry explanation for the replanning trigger.
+
+        Returns:
+            bool: True if an alternate safe route was discovered, False if blocked.
+        """
+        old_mode = self.nav_mode
+        self.nav_mode = NavigationMode.REPLANNING
+        self.replanning_events += 1
+
+        result = self.planner.plan(
+            grid=self.grid,
+            start=self.vehicle_pos,
+            goal=self.destination_pos,
+            drivable_values={int(CellType.DRIVABLE_ROAD)}
+        )
+        self.planning_result = result
+        self.planning_time_ms = result.execution_time_ms
+        self.explored_nodes_count = result.explored_nodes
+
+        if result.success:
+            self.planned_path = result.path
+            self.path_length = result.path_length
+            self.planning_status = "Path found"
+            # Resume autonomous or paused mode if previously active
+            if old_mode in (NavigationMode.AUTONOMOUS, NavigationMode.PAUSED):
+                self.nav_mode = old_mode
+            else:
+                self.nav_mode = NavigationMode.MANUAL
+            self.last_action_msg = f"Route replanned: {result.path_length} moves ({reason}, #{self.replanning_events})."
+            self.last_action_status = "success"
+            return True
+        else:
+            self.planned_path = []
+            self.path_length = 0
+            self.planning_status = "No valid path"
+            self.nav_mode = NavigationMode.NO_PATH
+            self.last_action_msg = "No safe path available. Vehicle stopped safely."
+            self.last_action_status = "blocked"
+            return False
+
+    def toggle_autonomous_navigation(self) -> None:
+        """Start, pause, or resume autonomous waypoint following."""
+        # 1. Active Autonomous -> Pause
+        if self.nav_mode == NavigationMode.AUTONOMOUS:
+            self.nav_mode = NavigationMode.PAUSED
+            self.last_action_msg = "Autonomous navigation PAUSED. Press SPACE to resume."
+            self.last_action_status = "normal"
+            return
+
+        # 2. Paused -> Resume
+        if self.nav_mode == NavigationMode.PAUSED:
+            if self.vehicle_pos == self.destination_pos:
+                self.nav_mode = NavigationMode.GOAL_REACHED
+                self.last_action_msg = "Goal reached! Vehicle at destination marker."
+                self.last_action_status = "success"
+                return
+
+            if self.is_route_blocked() or not self.planned_path or len(self.planned_path) < 2:
+                replan_success = self.replan_route(reason="Resuming autonomous movement")
+                if not replan_success:
+                    return
+
+            self.nav_mode = NavigationMode.AUTONOMOUS
+            self.step_timer_ms = 0
+            self.last_action_msg = f"Autonomous navigation RESUMED ({self.path_length} moves remaining)."
+            self.last_action_status = "success"
+            return
+
+        # 3. Manual, Goal Reached, or No Path -> Start
+        if self.vehicle_pos == self.destination_pos:
+            self.last_action_msg = "Already at destination. Press 'R' to reset."
+            self.last_action_status = "normal"
+            return
+
+        # Ensure valid route exists
+        if not self.planned_path or self.is_route_blocked() or len(self.planned_path) < 2:
+            res = self.plan_path()
+            if not res.success:
+                self.nav_mode = NavigationMode.NO_PATH
+                self.last_action_msg = "Cannot start autonomous navigation: No valid path."
+                self.last_action_status = "blocked"
+                return
+
+        self.nav_mode = NavigationMode.AUTONOMOUS
+        self.step_timer_ms = 0
+        self.last_action_msg = f"Autonomous navigation STARTED ({self.path_length} moves)."
+        self.last_action_status = "success"
+
+    def step_autonomous(self) -> bool:
+        """Advance the vehicle one waypoint step along the planned route.
+
+        Returns:
+            bool: True if vehicle advanced, False if halted, paused, or arrived.
+        """
+        if self.nav_mode != NavigationMode.AUTONOMOUS:
+            return False
+
+        # Destination check
+        if self.vehicle_pos == self.destination_pos:
+            self.nav_mode = NavigationMode.GOAL_REACHED
+            self.last_action_msg = "Goal Reached! Vehicle arrived at destination marker."
+            self.last_action_status = "success"
+            return False
+
+        # Verify remaining path
+        if not self.planned_path or len(self.planned_path) < 2:
+            success = self.replan_route(reason="End of path or empty route")
+            if not success or len(self.planned_path) < 2:
+                return False
+
+        # Check if route ahead is blocked
+        if self.is_route_blocked():
+            success = self.replan_route(reason="Obstacle detected on remaining route")
+            if not success or len(self.planned_path) < 2:
+                return False
+
+        next_cell = self.planned_path[1]
+        nr, nc = next_cell
+
+        # Strict safety check before moving into cell
+        if self.grid[nr, nc] != CellType.DRIVABLE_ROAD:
+            success = self.replan_route(reason=f"Waypoint ({nc}, {nr}) blocked")
+            if not success or len(self.planned_path) < 2:
+                return False
+            next_cell = self.planned_path[1]
+            nr, nc = next_cell
+            if self.grid[nr, nc] != CellType.DRIVABLE_ROAD:
+                self.nav_mode = NavigationMode.NO_PATH
+                self.last_action_msg = "Collision prevented: Path blocked. Stopped safely."
+                self.last_action_status = "blocked"
+                return False
+
+        # Advance vehicle to next waypoint
+        self.vehicle_pos = next_cell
+        self.planned_path.pop(0)
+        self.path_length = max(0, len(self.planned_path) - 1)
+
+        # Arrival verification
+        if self.vehicle_pos == self.destination_pos:
+            self.nav_mode = NavigationMode.GOAL_REACHED
+            self.last_action_msg = "Goal Reached! Vehicle arrived at destination marker."
+            self.last_action_status = "success"
+        else:
+            self.last_action_msg = f"Autonomous step to ({nc}, {nr}). {self.path_length} moves remaining."
+            self.last_action_status = "normal"
+
+        return True
+
+    def update(self, dt_ms: int = 16) -> None:
+        """Periodic tick update managing timed autonomous stepping.
+
+        Args:
+            dt_ms: Milliseconds elapsed since the previous update frame.
+        """
+        if self.nav_mode == NavigationMode.AUTONOMOUS:
+            self.step_timer_ms += dt_ms
+            while self.step_timer_ms >= self.step_delay_ms and self.nav_mode == NavigationMode.AUTONOMOUS:
+                self.step_timer_ms -= self.step_delay_ms
+                stepped = self.step_autonomous()
+                if not stepped:
+                    break
+
+    def insert_dynamic_obstacle(self, ahead_steps: int = 3) -> Optional[Tuple[int, int]]:
+        """Insert a new dynamic obstacle on the terrain corridor during simulation.
+
+        Prefers a valid drivable cell on the remaining planned route ahead of the vehicle.
+        Falls back to any safe drivable road cell if no route exists or route cells are unavailable.
+
+        Args:
+            ahead_steps: Target distance in steps ahead of the vehicle along the path.
+
+        Returns:
+            Optional[Tuple[int, int]]: Coordinate (r, c) of inserted obstacle, or None if failed.
+        """
+        chosen_cell: Optional[Tuple[int, int]] = None
+
+        # 1. Prefer a cell on the remaining planned route ahead of the vehicle
+        if self.planned_path and len(self.planned_path) > 1:
+            route_candidates = [
+                pos for pos in self.planned_path[1:]
+                if pos != self.vehicle_pos
+                and pos != self.destination_pos
+                and pos not in self.obstacle_set
+                and self.grid[pos] == CellType.DRIVABLE_ROAD
+            ]
+            if route_candidates:
+                target_idx = min(ahead_steps - 1, len(route_candidates) - 1)
+                chosen_cell = route_candidates[target_idx]
+
+        # 2. Fallback: Search safe drivable road cells
+        if chosen_cell is None:
+            road_candidates: List[Tuple[int, int]] = []
+            for r in range(self.rows):
+                for c in range(self.cols):
+                    pos = (r, c)
+                    if (
+                        self.grid[r, c] == CellType.DRIVABLE_ROAD
+                        and pos != self.vehicle_pos
+                        and pos != self.destination_pos
+                        and pos not in self.obstacle_set
+                    ):
+                        road_candidates.append(pos)
+
+            if road_candidates:
+                # Pick a candidate ahead of the vehicle row if possible
+                ahead_candidates = [pos for pos in road_candidates if pos[0] >= self.vehicle_pos[0]]
+                chosen_cell = ahead_candidates[0] if ahead_candidates else road_candidates[0]
+
+        # 3. If no drivable cell could be found
+        if chosen_cell is None:
+            self.last_action_msg = "Dynamic obstacle failed: No available drivable cells."
+            self.last_action_status = "blocked"
+            return None
+
+        # 4. Apply dynamic obstacle to grid and tracking sets
+        r, c = chosen_cell
+        self.grid[r, c] = CellType.OBSTACLE
+        self.obstacle_set.add(chosen_cell)
+        self.dynamic_obstacle_set.add(chosen_cell)
+
+        # 5. Check if the inserted obstacle obstructs the active route
+        blocks_route = self.planned_path and (chosen_cell in self.planned_path)
+        if blocks_route:
+            if self.nav_mode == NavigationMode.AUTONOMOUS:
+                self.replan_route(reason=f"Hazard spawned on active route at ({c}, {r})")
+            elif self.planned_path:
+                self.replan_route(reason=f"Hazard spawned on route at ({c}, {r})")
+        else:
+            self.last_action_msg = f"Dynamic hazard placed at ({c}, {r}) off active path. No replan needed."
+            self.last_action_status = "normal"
+
+        return chosen_cell
 
     def render(self, screen: pygame.Surface, fonts: dict, webcam_status: str) -> None:
         """Render the complete simulation frame: header, terrain grid, entities, and sidebar HUD.
@@ -255,7 +552,7 @@ class RoadEnvironment:
         title_surf = fonts["title"].render(self.WINDOW_TITLE, True, self.COLOR_TEXT_PRIMARY)
         screen.blit(title_surf, (self.grid_origin_x, 18))
 
-        sub_text = "Autonomous Navigation on Unstructured Roads  |  Day 2: Classical A* Path Planning"
+        sub_text = "Autonomous Navigation on Unstructured Roads  |  Day 3: Autonomous Traversal & Adaptive Replanning"
         sub_surf = fonts["small"].render(sub_text, True, self.COLOR_ACCENT_CYAN)
         screen.blit(sub_surf, (self.grid_origin_x, 52))
 
@@ -331,16 +628,22 @@ class RoadEnvironment:
 
     def _render_entities(self, screen: pygame.Surface, fonts: dict) -> None:
         """Render static obstacles, destination marker, and the vehicle."""
-        # 1. Static obstacles (Red blocks with distinct cross/warning icon)
+        # 1. Obstacles (Static & Dynamic)
         for (r, c) in self.obstacle_set:
             px = self.grid_origin_x + c * self.cell_size
             py = self.grid_origin_y + r * self.cell_size
             pad = 3
             obs_rect = pygame.Rect(px + pad, py + pad, self.cell_size - 2 * pad, self.cell_size - 2 * pad)
             pygame.draw.rect(screen, self.COLOR_OBSTACLE, obs_rect, border_radius=4)
-            # Inner dark warning detail
-            pygame.draw.line(screen, (120, 20, 20), (px + pad + 3, py + pad + 3), (px + self.cell_size - pad - 4, py + self.cell_size - pad - 4), 2)
-            pygame.draw.line(screen, (120, 20, 20), (px + self.cell_size - pad - 4, py + pad + 3), (px + pad + 3, py + self.cell_size - pad - 4), 2)
+
+            # Highlight dynamic hazards with distinct amber border
+            if (r, c) in self.dynamic_obstacle_set:
+                pygame.draw.rect(screen, self.COLOR_DYNAMIC_BORDER, obs_rect, width=2, border_radius=4)
+                pygame.draw.circle(screen, self.COLOR_DYNAMIC_BORDER, obs_rect.center, 3)
+            else:
+                # Inner dark warning detail for static hazards
+                pygame.draw.line(screen, (120, 20, 20), (px + pad + 3, py + pad + 3), (px + self.cell_size - pad - 4, py + self.cell_size - pad - 4), 2)
+                pygame.draw.line(screen, (120, 20, 20), (px + self.cell_size - pad - 4, py + pad + 3), (px + pad + 3, py + self.cell_size - pad - 4), 2)
 
         # 2. Destination marker (Yellow target with ring)
         dest_r, dest_c = self.destination_pos
@@ -357,6 +660,12 @@ class RoadEnvironment:
         veh_px = self.grid_origin_x + veh_c * self.cell_size
         veh_py = self.grid_origin_y + veh_r * self.cell_size
         veh_rect = pygame.Rect(veh_px + 2, veh_py + 2, self.cell_size - 4, self.cell_size - 4)
+
+        # In autonomous mode, add an active cyan navigation glow
+        if self.nav_mode == NavigationMode.AUTONOMOUS:
+            glow_rect = pygame.Rect(veh_px, veh_py, self.cell_size, self.cell_size)
+            pygame.draw.rect(screen, self.COLOR_ACCENT_CYAN, glow_rect, 2, border_radius=6)
+
         pygame.draw.rect(screen, self.COLOR_VEHICLE, veh_rect, border_radius=5)
         # Center vehicle core
         veh_center = (veh_px + self.cell_size // 2, veh_py + self.cell_size // 2)
@@ -368,35 +677,39 @@ class RoadEnvironment:
         card_w = self.sidebar_width
         curr_y = self.grid_origin_y
 
-        # Card 1: System & A* Path Telemetry
+        # Card 1: Autonomous Navigation HUD
         card1_h = 205
-        self._draw_panel_box(screen, card_x, curr_y, card_w, card1_h, "A* PATH PLANNING & TELEMETRY")
+        self._draw_panel_box(screen, card_x, curr_y, card_w, card1_h, "AUTONOMOUS NAVIGATION HUD")
         
         veh_r, veh_c = self.vehicle_pos
         dest_r, dest_c = self.destination_pos
-        manhattan_dist = abs(dest_r - veh_r) + abs(dest_c - veh_c)
 
-        path_length_str = f"{self.path_length} moves" if self.planned_path else "None"
+        path_length_str = f"{self.path_length} moves" if self.planned_path else "0"
         explored_str = f"{self.explored_nodes_count} cells" if self.explored_nodes_count > 0 else "0"
         time_str = f"{self.planning_time_ms:.2f} ms" if self.planning_time_ms > 0 else "N/A"
 
-        status_val_color = self.COLOR_TEXT_SECONDARY
-        if self.planning_status == "Path found":
-            status_val_color = self.COLOR_ACCENT_GREEN
-        elif self.planning_status == "No valid path":
-            status_val_color = self.COLOR_OBSTACLE
-        elif self.planning_status == "Press P to plan":
-            status_val_color = self.COLOR_ACCENT_AMBER
+        # Color coding for active navigation state
+        mode_val_color = self.COLOR_TEXT_PRIMARY
+        if self.nav_mode == NavigationMode.AUTONOMOUS:
+            mode_val_color = self.COLOR_ACCENT_CYAN
+        elif self.nav_mode == NavigationMode.PAUSED:
+            mode_val_color = self.COLOR_ACCENT_AMBER
+        elif self.nav_mode == NavigationMode.REPLANNING:
+            mode_val_color = self.COLOR_MODE_REPLANNING
+        elif self.nav_mode == NavigationMode.GOAL_REACHED:
+            mode_val_color = self.COLOR_ACCENT_GREEN
+        elif self.nav_mode == NavigationMode.NO_PATH:
+            mode_val_color = self.COLOR_OBSTACLE
 
         lines_telemetry = [
-            ("Execution Mode:", "Manual + A* (Day 2)", self.COLOR_TEXT_PRIMARY),
+            ("Navigation Mode:", self.nav_mode.value, mode_val_color),
             ("Vehicle Pos (X, Y):", f"({veh_c}, {veh_r})", self.COLOR_TEXT_PRIMARY),
             ("Destination (X, Y):", f"({dest_c}, {dest_r})", self.COLOR_TEXT_PRIMARY),
-            ("Heuristic (L1):", f"{manhattan_dist} cells", self.COLOR_TEXT_PRIMARY),
-            ("Planning Status:", self.planning_status, status_val_color),
-            ("Path Length:", path_length_str, self.COLOR_ACCENT_GREEN if self.planned_path else self.COLOR_TEXT_PRIMARY),
+            ("Remaining Moves:", path_length_str, self.COLOR_ACCENT_GREEN if self.planned_path else self.COLOR_TEXT_PRIMARY),
+            ("Replanning Events:", f"{self.replanning_events} dynamic", self.COLOR_MODE_REPLANNING if self.replanning_events > 0 else self.COLOR_TEXT_PRIMARY),
+            ("Collision Count:", f"{self.collision_count} (Safe)", self.COLOR_ACCENT_GREEN),
+            ("Last Compute Time:", time_str, self.COLOR_TEXT_PRIMARY),
             ("Explored Nodes:", explored_str, self.COLOR_TEXT_PRIMARY),
-            ("Execution Time:", time_str, self.COLOR_TEXT_PRIMARY),
         ]
 
         ty = curr_y + 32
@@ -429,7 +742,7 @@ class RoadEnvironment:
         legend_items = [
             (self.COLOR_VEHICLE, "Vehicle (Autonomous Agent)"),
             (self.COLOR_DESTINATION, "Target Navigation Destination"),
-            (self.COLOR_OBSTACLE, "Static Hazard (Pothole / Boulder)"),
+            (self.COLOR_OBSTACLE, "Static & Dynamic Hazards"),
             (self.COLOR_PATH, "Planned Route (A* Path)"),
             (self.COLOR_DRIVABLE_ROAD, "Drivable Unstructured Road"),
             (self.COLOR_BORDER_TERRAIN, "Non-Drivable Verge / Shoulder"),
@@ -448,23 +761,24 @@ class RoadEnvironment:
         curr_y += card3_h + 10
 
         # Card 4: Keyboard Controls Guide
-        card4_h = 142
+        card4_h = 150
         self._draw_panel_box(screen, card_x, curr_y, card_w, card4_h, "KEYBOARD CONTROLS")
         controls = [
-            ("P Key", "Compute A* optimal route"),
-            ("R Key", "Reset vehicle & clear route"),
-            ("W / A / S / D", "Move vehicle (Grid steps)"),
-            ("C Key", "Toggle webcam stream"),
-            ("ESC Key", "Safe application exit"),
+            ("SPACE", "Start / Pause autonomous"),
+            ("O Key", "Insert dynamic hazard"),
+            ("P Key", "Compute / refresh route"),
+            ("R Key", "Reset vehicle & hazards"),
+            ("W / A / S / D", "Manual step (when inactive)"),
+            ("C / ESC", "Webcam feed / Safe exit"),
         ]
 
-        cy = curr_y + 28
+        cy = curr_y + 26
         for key_str, desc in controls:
             k_surf = fonts["mono_small"].render(key_str, True, self.COLOR_ACCENT_AMBER)
             d_surf = fonts["small"].render(desc, True, self.COLOR_TEXT_SECONDARY)
             screen.blit(k_surf, (card_x + 14, cy))
-            screen.blit(d_surf, (card_x + 115, cy))
-            cy += 21
+            screen.blit(d_surf, (card_x + 105, cy))
+            cy += 19
 
     def _render_footer(self, screen: pygame.Surface, fonts: dict) -> None:
         """Render status action feedback bar at the bottom."""
