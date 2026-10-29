@@ -9,35 +9,35 @@ This 10-day project incrementally constructs an autonomous navigation system des
 - **Day 1:** Modular Architecture, Simulation Grid Baseline & Perception Hooks (Completed)
 - **Day 2:** Classical Path Planning (A* Search on Grid Maps) (Completed)
 - **Day 3:** Autonomous Movement, Dynamic Hazard Insertion & Adaptive Replanning (Completed)
-- **Day 4 (Current): Reliable MacBook Webcam Integration (Completed)**
-- **Day 5:** Unstructured Road Boundary Cost Fields & Dynamic Weighting
-- **Day 6:** Computer Vision Preprocessing for Off-Road Terrain
-- **Day 7:** Visual Obstacle Detection Baseline
-- **Day 8:** Sensor-Grid Fusion (Mapping Vision Detections to Costmap)
+- **Day 4:** Reliable MacBook Webcam Integration (Completed)
+- **Day 5 (Current): Local YOLO Object Detection Module (Completed)**
+- **Day 6:** Unstructured Road Boundary Cost Fields & Dynamic Weighting
+- **Day 7:** Sensor-Grid Fusion (Mapping Vision Detections to Costmap)
+- **Day 8:** Dynamic Moving Obstacle Avoidance
 - **Day 9:** Closed-Loop Autonomous Navigation Simulation
 - **Day 10:** Performance Benchmarking, Robustness Testing & Final Documentation
 
 ---
 
-## 🎯 Day 4 Scope & Objectives: Reliable MacBook Webcam Integration
-Day 4 establishes reliable, continuous video streaming from the MacBook Air's built-in FaceTime HD camera, ensuring stable real-time perception for future computer vision phases without interfering with simulation performance:
-1. **Accurate Device Selection & iPhone Continuity Camera Bypass:**
-   - Detects the MacBook's physical built-in FaceTime HD camera via macOS `system_profiler` discovery.
-   - Specifically filters out paired iPhones and external Continuity Camera handles, preventing unwanted wireless connection chimes and camera switching.
-   - Configurable via `--camera-index` command line flag or `MACBOOK_CAMERA_INDEX` environment variable.
-2. **Robust Multi-Threaded Capture Loop:**
-   - Employs an asynchronous background worker thread using native macOS **AVFoundation** (`cv2.CAP_AVFOUNDATION`).
-   - Accommodates camera sensor warmup times (handling initial empty frames gracefully without premature failure).
-   - Atomic, bounded (depth 1) frame buffer eliminates frame queuing latency and memory growth.
-   - Calculates real-time rolling FPS and frame counts.
-3. **Pygame Simulation & Telemetry Integration:**
-   - Seamlessly toggleable with the **`C`** key.
-   - Telemetry status card displays operational states: `OFF`, `STARTING`, `ACTIVE`, or `ERROR` with live FPS and resolution.
-   - Simulation event loop and A* path planning remain strictly decoupled from webcam operations—camera failures never crash or interrupt navigation.
-4. **Standalone Hardware Verification Utility:**
-   - Includes `tools/test_webcam_live.py` for direct hardware verification with real-time video overlay.
-5. **Comprehensive Automated Test Coverage:**
-   - Automated tests with deterministic mocks verifying initialization, error recovery, idempotence, device selection, and thread termination.
+## 🎯 Day 5 Scope & Objectives: Local YOLO Object Detection
+Day 5 introduces local deep-learning perception by adding an Ultralytics YOLO object detection module to process video frames from the MacBook built-in camera:
+1. **Lightweight Pretrained YOLO Model (`yolo11n.pt`):**
+   - Employs the Ultralytics YOLOv11 nano model (`yolo11n.pt`, ~5.4 MB) running 100% locally on CPU/Apple Silicon Neural Engine with zero paid APIs.
+   - Recognizes 80 COCO classes (vehicles, pedestrians, animals, traffic signs, obstacles).
+2. **Structured Detection Data Model:**
+   - Exposes strongly typed `Detection` records containing class ID, class name, confidence score, bounding box `(x1, y1, x2, y2)`, dimensions, and center coordinates.
+3. **Robust Fallbacks & Error Handling:**
+   - Safely handles empty frames, corrupt images, missing model weights, and inference exceptions without crashing.
+   - Configurable confidence threshold (`conf_threshold`, default 0.35) and input image size (`imgsz`, default 640).
+4. **Standalone Live Detection Demo Tool (`tools/test_detection_live.py`):**
+   - Connects to the verified MacBook camera (bypassing iPhone Continuity Camera).
+   - Annotates live frames with bounding boxes, labels, confidence scores, stream FPS, and neural network inference latency ($ms$).
+   - Respects the single camera owner rule: ensures clean, exclusive hardware access.
+5. **Decoupled Architecture & Scope Safety:**
+   - Object detection is strictly isolated from the A* planner and Pygame grid. Detections do not automatically alter the simulation map yet (scheduled for Day 7 Sensor-Grid Fusion).
+   - No assumptions of real-world 3D depth, metric distance, or drivable area are made from 2D bounding boxes.
+6. **Automated Unit Testing Without Heavy Dependencies:**
+   - Comprehensive unit tests in `tests/test_detection.py` using mock frames and mock model outputs, enabling deterministic CI execution without downloading weights or requiring a camera.
 
 ---
 
@@ -46,26 +46,30 @@ Day 4 establishes reliable, continuous video streaming from the MacBook Air's bu
 ```text
 adaptive-path-planning/
 ├── main.py                     # Application entry point, event loop & key handling
-├── requirements.txt            # Locked minimum dependencies (Pygame, OpenCV, NumPy)
+├── requirements.txt            # Dependencies (Pygame, OpenCV, NumPy, Ultralytics)
 ├── README.md                   # Comprehensive documentation and runbook
 ├── .gitignore                  # Git exclusions for Python bytecode and venvs
+├── yolo11n.pt                  # Local Ultralytics YOLOv11 nano model weights (~5.4 MB)
 ├── planning/                   # Classical path planning package
 │   ├── __init__.py             # Planning package initialization
 │   └── astar.py                # Modular A* planner with Manhattan heuristic & priority queue
 ├── perception/
 │   ├── __init__.py             # Perception package initialization & exports
-│   └── webcam.py               # Modular OpenCV webcam manager with AVFoundation & thread capture
+│   ├── webcam.py               # Modular OpenCV webcam manager with AVFoundation & thread capture
+│   └── object_detector.py      # Modular Ultralytics YOLO object detector & Detection dataclass
 ├── simulation/
 │   ├── __init__.py             # Simulation package initialization & exports
 │   └── environment.py          # 2D road environment, autonomous controller & HUD
 ├── tools/
 │   ├── __init__.py             # Tools package initialization
-│   └── test_webcam_live.py     # Standalone manual live test utility for MacBook camera
+│   ├── test_webcam_live.py     # Standalone manual live test utility for MacBook camera
+│   └── test_detection_live.py  # Standalone live YOLO detection demo on MacBook camera
 ├── tests/
 │   ├── test_day1.py            # Automated tests: Baseline environment & sensors (8 tests)
 │   ├── test_astar.py           # Automated tests: Classical A* algorithm (15 tests)
 │   ├── test_day3.py            # Automated tests: Autonomous navigation & replanning (11 tests)
-│   └── test_webcam.py          # Automated tests: MacBook webcam integration & mock streaming (9 tests)
+│   ├── test_webcam.py          # Automated tests: MacBook webcam integration & mock streaming (9 tests)
+│   └── test_detection.py       # Automated tests: YOLO detection parsing, errors & decoupling (7 tests)
 ├── assets/                     # Sprites, textures, and map assets (.gitkeep)
 └── screenshots/                # Rendered UI screenshots and visual validation (.gitkeep)
 ```
@@ -289,19 +293,58 @@ Features:
    - Toggle **ON** the switch next to your terminal application (e.g., Terminal, iTerm2, or VS Code).
    - Restart the terminal and launch `python main.py`.
 
-### 6. Scope Boundaries & Future Work
-- **Webcam-to-Map Costmap Fusion:** In Day 4, the camera stream provides validated live video frames. Transforming camera pixels into road obstacles and projecting them onto the 2D grid costmap via Inverse Perspective Mapping (IPM) is scheduled for **Day 7**.
-- **YOLO Object Detection:** Deep-learning obstacle detection using YOLO or mobile object detectors is scheduled for **Day 6**.
+---
+
+## 👁️ Day 5: Local YOLO Object Detection Architecture
+
+### 1. Modular YOLO Perception Engine (`perception/object_detector.py`)
+Day 5 introduces local deep-learning inference to process camera frames in real time:
+- **Lightweight Pretrained Model (`yolo11n.pt`):** Uses the state-of-the-art Ultralytics YOLOv11 nano model (~5.4 MB), running 100% locally on CPU or Apple Silicon Neural Engine (MPS) with zero cloud APIs or paid services.
+- **Structured Data Contract (`Detection`):**
+  Each detection returns a structured dataclass containing:
+  - `class_id` (int) and `class_name` (str) from the 80 COCO classes.
+  - `confidence` (float between 0.0 and 1.0).
+  - `bbox` as integer pixel coordinates `(x1, y1, x2, y2)`.
+  - Computed helpers: `width`, `height`, `center` `(cx, cy)`, and `to_dict()`.
+- **Configurable Thresholds:** Easily configure confidence filtering (`conf_threshold`, default 0.35) and input image sizing (`imgsz`, default 640).
+- **Graceful Error Recovery:** Safely rejects `None` frames, zero-sized arrays, missing weights, or inference exceptions without crashing.
+
+### 2. Standalone Live Detection Demo Tool (`tools/test_detection_live.py`)
+To test real-time object detection with live video overlay from your MacBook webcam:
+
+```bash
+python tools/test_detection_live.py
+```
+
+Optional CLI parameters:
+```bash
+python tools/test_detection_live.py --model yolo11n.pt --conf 0.40 --imgsz 640
+```
+
+> [!IMPORTANT]
+> **Single Camera Owner Rule:** On macOS AVFoundation, camera hardware can only be accessed by one application at a time. Ensure that `python main.py` is closed before launching `test_detection_live.py` so the camera handle is available.
+
+Features:
+- Connects directly to the verified MacBook built-in camera (bypassing paired iPhones).
+- Overlays stylish bounding boxes, class labels, confidence scores, and real-time neural network inference latency ($ms$).
+- Displays stream FPS counter.
+- Press **`ESC`** or **`q`** to cleanly exit and release camera hardware.
+
+### 3. Decoupling & Scientific Scope Boundaries
+- **Strict Decoupling from Path Planning:** Object detection operates purely as an isolated perception layer. Detections do **not** automatically inject obstacles into the A* grid or alter the vehicle route.
+- **Sensor-Grid Fusion Scheduled for Day 7:** Transforming camera pixels into road obstacles and projecting them onto the 2D grid costmap via Inverse Perspective Mapping (IPM) is scheduled for **Day 7**.
+- **No Distance/Depth Claims:** 2D bounding boxes from a monocular camera do not provide real-world metric distance, depth, or safe drivable-area boundaries without spatial calibration or stereo/depth estimation.
 
 ---
 
 ## 🧪 Automated Testing & Verification
 
-Automated test suites comprehensively verify environment physics, classical A* planning, autonomous navigation, and webcam integration:
+Automated test suites comprehensively verify environment physics, classical A* planning, autonomous navigation, webcam integration, and YOLO detection:
 1. `tests/test_day1.py` (8 tests): Baseline grid geometry, obstacle seeding, vehicle boundaries, collision prevention, and webcam lifecycle.
 2. `tests/test_astar.py` (15 tests): Comprehensive A* verification covering Manhattan heuristic admissibility, wall detours, enclosed destinations, start==goal edge cases, invalid coordinate rejection, 4-directional enforcement, move-count accuracy, deterministic repeatability, `RoadEnvironment` integration, route clearing on manual movement, and headless rendering.
 3. `tests/test_day3.py` (11 tests): Autonomous navigation controller, `SPACE` pause/resume, goal arrival detection, dynamic obstacle injection ahead of vehicle, adaptive detour replanning, zero-collision safety guarantee, safe halting on complete path blockage, dynamic obstacle non-overwrite constraints, reset restoration, manual control locking during autonomous mode, selective replanning avoidance for off-route hazards, and headless rendering.
 4. `tests/test_webcam.py` (9 tests): Successful camera initialization and frame capture, RGB color conversion, camera unavailable error handling, sustained read failure detection, repeated toggle idempotence, duplicate session prevention, resource cleanup, environment variable device configuration, iPhone bypass filtering, and decoupling from A* path planning.
+5. `tests/test_detection.py` (8 tests): `Detection` dataclass properties and serialization, empty/invalid frame safety, unloaded model handling, graceful load failure recovery, YOLO result parsing into structured detections, visual annotation rendering, and grid decoupling safety invariant.
 
 Run all tests with:
 ```bash
@@ -311,17 +354,17 @@ python3 -m unittest discover tests
 
 Expected result:
 ```text
-...........................................
+...................................................
 ----------------------------------------------------------------------
-Ran 43 tests in ~2.0s
+Ran 51 tests in ~2.2s
 
 OK
 ```
 
 ---
 
-## 🔮 Planned Day 5 Work: Road Boundary Cost Fields & Dynamic Weighting
-On Day 5, we will enhance the grid planner with:
+## 🔮 Planned Day 6 Work: Road Boundary Cost Fields & Dynamic Weighting
+On Day 6, we will enhance the grid planner with:
 - **Boundary Cost Fields:** Applying distance-transform cost gradients to heavily penalize proximity to rough road edges, ditch drops, and potholes, encouraging the vehicle to naturally maintain center-lane clearance.
 - **Dynamic Risk Weighting:** Modulating traversal costs near terrain hazards dynamically.
 

@@ -23,3 +23,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Model weights
+*.pt
+*.pth
