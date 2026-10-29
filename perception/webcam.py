@@ -29,17 +29,20 @@ class CameraState(str, Enum):
 
 
 def get_macbook_builtin_camera_index() -> int:
-    """Determine the device index for the MacBook's built-in FaceTime camera.
+    """Determine the device index for the MacBook's built-in FaceTime HD camera.
 
-    Prioritizes:
-    1. Environment variable MACBOOK_CAMERA_INDEX (if explicitly set).
-    2. macOS system_profiler SPCameraDataType discovery to identify the exact
-       index of the built-in FaceTime camera while filtering out any paired iPhone /
-       Continuity Camera devices.
-    3. Verified hardware fallback index 0 (standard MacBook built-in camera).
+    On macOS with OpenCV AVFoundation:
+    - When a paired iPhone (Continuity Camera) is present on the system, macOS AVFoundation
+      assigns device index 0 to the iPhone (as the default virtual camera) and device index 1
+      to the physical MacBook built-in FaceTime HD camera.
+    - When no iPhone is paired, device index 0 is the physical MacBook built-in camera.
+
+    This function inspects system_profiler SPCameraDataType to detect whether an iPhone
+    is recognized and selects the MacBook built-in camera index, guaranteeing that the
+    MacBook camera is chosen as the primary device and the iPhone is NEVER connected.
 
     Returns:
-        int: Camera device index for the MacBook built-in camera.
+        int: Camera device index for the MacBook built-in camera (1 if iPhone paired, 0 otherwise).
     """
     # 1. Explicit environment override
     env_index = os.environ.get("MACBOOK_CAMERA_INDEX")
@@ -64,44 +67,26 @@ def get_macbook_builtin_camera_index() -> int:
         data = json.loads(raw)
         cams = data.get("SPCameraDataType", [])
 
-        # Inspect camera metadata in order
-        for idx, cam in enumerate(cams):
-            name = (cam.get("_name") or "").lower()
-            model_id = (cam.get("spcamera_model-id") or "").lower()
+        # Check if an iPhone / Continuity Camera is recognized by macOS
+        has_iphone = any(
+            "iphone" in (c.get("spcamera_model-id") or "").lower()
+            or "iphone" in (c.get("_name") or "").lower()
+            for c in cams
+        )
 
-            # Skip iPhone / Continuity Camera devices
-            if "iphone" in name or "iphone" in model_id:
-                logger.debug("Skipping iPhone device '%s' at discovery index %d.", cam.get("_name"), idx)
-                continue
+        if has_iphone:
+            logger.info(
+                "macOS has a paired iPhone (Continuity Camera). AVFoundation assigns index 0 to iPhone. "
+                "Exclusively selecting MacBook built-in FaceTime HD camera at index 1 to bypass iPhone."
+            )
+            return 1
 
-            # Identify built-in FaceTime HD camera
-            if (
-                "facetime" in name
-                or "facetime" in model_id
-                or "built-in" in name
-                or "built-in" in model_id
-                or "internal" in name
-            ):
-                logger.info(
-                    "Identified verified MacBook built-in camera '%s' at AVFoundation index %d.",
-                    cam.get("_name"),
-                    idx
-                )
-                return idx
-
-        # If cams exist and index 0 is not an iPhone, return 0
-        if cams:
-            first_name = (cams[0].get("_name") or "").lower()
-            if "iphone" not in first_name:
-                return 0
-
-        # Verified default on MacBook Air
-        logger.info("Using default MacBook built-in camera index 0.")
+        logger.info("No paired iPhone detected. Selecting MacBook built-in camera at index 0.")
         return 0
 
     except Exception as exc:
-        logger.debug("Could not query system_profiler for cameras (%s); defaulting to index 0.", exc)
-        return 0
+        logger.debug("Could not query system_profiler for cameras (%s); defaulting to index 1.", exc)
+        return 1
 
 
 class WebcamManager:

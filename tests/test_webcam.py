@@ -241,8 +241,29 @@ class TestMacBookWebcam(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             with patch("sys.platform", "darwin"):
                 idx = get_macbook_builtin_camera_index()
-                # FaceTime camera is at index 1 in this mock JSON; iPhone at 0 should be skipped
+                # When an iPhone is present, AVFoundation maps iPhone to 0, so MacBook camera is at index 1
                 self.assertEqual(idx, 1)
+
+    @patch("perception.webcam.subprocess.check_output")
+    def test_device_detection_without_iphone_selects_index_zero(self, mock_subprocess):
+        """Test discovery selects index 0 when no iPhone is paired."""
+        mock_json = """
+        {
+          "SPCameraDataType" : [
+            {
+              "_name" : "FaceTime HD Camera",
+              "spcamera_model-id" : "FaceTime HD Camera",
+              "spcamera_unique-id" : "EAB7A68F-EC2B-4487-AADF-D8A91C1CB782"
+            }
+          ]
+        }
+        """
+        mock_subprocess.return_value = mock_json
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("sys.platform", "darwin"):
+                idx = get_macbook_builtin_camera_index()
+                self.assertEqual(idx, 0)
 
 
 if __name__ == "__main__":
