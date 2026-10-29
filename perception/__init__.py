@@ -1,4 +1,5 @@
-"""Perception module for webcam stream and sensor inputs."""
-from .webcam import WebcamManager
+"""Perception package for camera streams and sensor inputs."""
 
-__all__ = ["WebcamManager"]
+from .webcam import WebcamManager, CameraState, get_macbook_builtin_camera_index
+
+__all__ = ["WebcamManager", "CameraState", "get_macbook_builtin_camera_index"]

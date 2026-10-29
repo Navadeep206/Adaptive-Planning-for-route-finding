@@ -1,8 +1,8 @@
-"""Main entry point for Day 3: Autonomous Traversal & Adaptive Replanning Environment.
+"""Main entry point for Adaptive Path Planning and Simulation Environment.
 
-Sets up the Pygame rendering loop, handles interactive keyboard controls (including
+Coordinates Pygame rendering loop, interactive keyboard controls (including
 autonomous navigation via SPACE, dynamic hazard insertion via 'O', A* computation via 'P',
-and reset via 'R'), coordinates the OpenCV webcam stream, and manages clean system shutdown.
+and reset via 'R'), reliable MacBook webcam stream via 'C', and manages clean system shutdown.
 """
 
 import argparse
@@ -135,7 +135,7 @@ def main() -> None:
                     # Toggle OpenCV webcam preview
                     elif event.key == pygame.K_c:
                         is_active = webcam.toggle_preview()
-                        logger.info("Webcam toggled: active=%s (%s)", is_active, webcam.device_name)
+                        logger.info("Webcam toggled: active=%s (%s, state=%s)", is_active, webcam.device_name, webcam.get_state().value)
 
             # 3. Update Autonomous Navigation & Timing
             env.update(dt_ms)

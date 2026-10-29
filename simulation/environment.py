@@ -723,16 +723,21 @@ class RoadEnvironment:
         curr_y += card1_h + 10
 
         # Card 2: Perception / Webcam Status
-        card2_h = 65
+        card2_h = 66
         self._draw_panel_box(screen, card_x, curr_y, card_w, card2_h, "PERCEPTION & SENSORS")
-        status_color = self.COLOR_ACCENT_GREEN if "Active" in webcam_status else self.COLOR_TEXT_SECONDARY
-        if "Unavailable" in webcam_status or "Denied" in webcam_status or "Error" in webcam_status:
+        status_color = self.COLOR_TEXT_SECONDARY
+        status_upper = webcam_status.upper()
+        if "ACTIVE" in status_upper:
+            status_color = self.COLOR_ACCENT_GREEN
+        elif "STARTING" in status_upper or "INITIALIZING" in status_upper:
+            status_color = self.COLOR_ACCENT_AMBER
+        elif "ERROR" in status_upper or "UNAVAILABLE" in status_upper or "DENIED" in status_upper:
             status_color = self.COLOR_OBSTACLE
 
         cam_lbl = fonts["small"].render("Webcam Feed:", True, self.COLOR_TEXT_SECONDARY)
         cam_val = fonts["small"].render(webcam_status, True, status_color)
         screen.blit(cam_lbl, (card_x + 14, curr_y + 28))
-        screen.blit(cam_val, (card_x + 14, curr_y + 44))
+        screen.blit(cam_val, (card_x + 14, curr_y + 45))
 
         curr_y += card2_h + 10
 

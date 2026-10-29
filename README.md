@@ -8,36 +8,36 @@ An academic and engineering project developing an adaptive path planning and col
 This 10-day project incrementally constructs an autonomous navigation system designed for off-road and rural environments lacking painted lane markings:
 - **Day 1:** Modular Architecture, Simulation Grid Baseline & Perception Hooks (Completed)
 - **Day 2:** Classical Path Planning (A* Search on Grid Maps) (Completed)
-- **Day 3 (Current): Autonomous Movement, Dynamic Hazard Insertion & Adaptive Replanning**
-- **Day 4:** Unstructured Road Boundary Cost Fields & Dynamic Weighting
-- **Day 5:** Computer Vision Preprocessing for Off-Road Terrain
-- **Day 6:** Visual Obstacle Detection Baseline
-- **Day 7:** Sensor-Grid Fusion (Mapping Vision Detections to Costmap)
-- **Day 8:** Dynamic Moving Obstacle Avoidance
+- **Day 3:** Autonomous Movement, Dynamic Hazard Insertion & Adaptive Replanning (Completed)
+- **Day 4 (Current): Reliable MacBook Webcam Integration (Completed)**
+- **Day 5:** Unstructured Road Boundary Cost Fields & Dynamic Weighting
+- **Day 6:** Computer Vision Preprocessing for Off-Road Terrain
+- **Day 7:** Visual Obstacle Detection Baseline
+- **Day 8:** Sensor-Grid Fusion (Mapping Vision Detections to Costmap)
 - **Day 9:** Closed-Loop Autonomous Navigation Simulation
 - **Day 10:** Performance Benchmarking, Robustness Testing & Final Documentation
 
 ---
 
-## 🎯 Day 3 Scope & Objectives: Autonomous Movement & Dynamic Replanning
-Day 3 brings the simulation to life with closed-loop autonomous waypoint tracking and dynamic obstacle replanning:
-1. **Autonomous Waypoint Controller:**
-   - **`SPACE` Key Control:** Smooth start, pause, and resume of autonomous movement along the optimal A* route.
-   - **Timed Step Pacing:** Moves the vehicle one grid cell at a time every 250 ms (4 cells/sec) while the simulation event loop and renderer maintain a silky-smooth 60 FPS.
-   - **Goal Arrival:** Automatically detects arrival at the destination marker, transitions state to `"Goal Reached"`, and stops motion cleanly.
-2. **Dynamic Obstacle Injection (`O` Key):**
-   - Spawns new hazards during simulation.
-   - Prefers open road cells directly along the remaining planned route ahead of the vehicle to challenge the planner.
-   - Strictly protects road boundaries, current vehicle position, and destination from being overwritten.
-3. **Collision Prevention & Adaptive Replanning:**
-   - Evaluates remaining trajectory before every step.
-   - When a newly spawned obstacle blocks the route, movement into the blocked cell is strictly prevented, and an alternate collision-free path is recomputed on-the-fly.
-   - Avoids unnecessary replanning if hazards spawn off the active route corridor.
-   - If a route is completely blocked, safely halts the vehicle in `"No Path"` mode with 0 collisions.
-4. **Enhanced Telemetry HUD:**
-   - Live **Navigation Mode** tracking: `Manual`, `Autonomous`, `Paused`, `Replanning`, `Goal Reached`, and `No Path`.
-   - Dynamic **Replanning Events** counter and verified zero-collision safety metric.
-   - High-contrast visual distinctions for dynamically spawned hazards and active navigation states.
+## 🎯 Day 4 Scope & Objectives: Reliable MacBook Webcam Integration
+Day 4 establishes reliable, continuous video streaming from the MacBook Air's built-in FaceTime HD camera, ensuring stable real-time perception for future computer vision phases without interfering with simulation performance:
+1. **Accurate Device Selection & iPhone Continuity Camera Bypass:**
+   - Detects the MacBook's physical built-in FaceTime HD camera via macOS `system_profiler` discovery.
+   - Specifically filters out paired iPhones and external Continuity Camera handles, preventing unwanted wireless connection chimes and camera switching.
+   - Configurable via `--camera-index` command line flag or `MACBOOK_CAMERA_INDEX` environment variable.
+2. **Robust Multi-Threaded Capture Loop:**
+   - Employs an asynchronous background worker thread using native macOS **AVFoundation** (`cv2.CAP_AVFOUNDATION`).
+   - Accommodates camera sensor warmup times (handling initial empty frames gracefully without premature failure).
+   - Atomic, bounded (depth 1) frame buffer eliminates frame queuing latency and memory growth.
+   - Calculates real-time rolling FPS and frame counts.
+3. **Pygame Simulation & Telemetry Integration:**
+   - Seamlessly toggleable with the **`C`** key.
+   - Telemetry status card displays operational states: `OFF`, `STARTING`, `ACTIVE`, or `ERROR` with live FPS and resolution.
+   - Simulation event loop and A* path planning remain strictly decoupled from webcam operations—camera failures never crash or interrupt navigation.
+4. **Standalone Hardware Verification Utility:**
+   - Includes `tools/test_webcam_live.py` for direct hardware verification with real-time video overlay.
+5. **Comprehensive Automated Test Coverage:**
+   - Automated tests with deterministic mocks verifying initialization, error recovery, idempotence, device selection, and thread termination.
 
 ---
 
@@ -53,15 +53,19 @@ adaptive-path-planning/
 │   ├── __init__.py             # Planning package initialization
 │   └── astar.py                # Modular A* planner with Manhattan heuristic & priority queue
 ├── perception/
-│   ├── __init__.py             # Perception package initialization
-│   └── webcam.py               # Modular OpenCV webcam manager with error handling
+│   ├── __init__.py             # Perception package initialization & exports
+│   └── webcam.py               # Modular OpenCV webcam manager with AVFoundation & thread capture
 ├── simulation/
 │   ├── __init__.py             # Simulation package initialization & exports
 │   └── environment.py          # 2D road environment, autonomous controller & HUD
+├── tools/
+│   ├── __init__.py             # Tools package initialization
+│   └── test_webcam_live.py     # Standalone manual live test utility for MacBook camera
 ├── tests/
 │   ├── test_day1.py            # Automated tests: Baseline environment & sensors (8 tests)
 │   ├── test_astar.py           # Automated tests: Classical A* algorithm (15 tests)
-│   └── test_day3.py            # Automated tests: Autonomous navigation & replanning (11 tests)
+│   ├── test_day3.py            # Automated tests: Autonomous navigation & replanning (11 tests)
+│   └── test_webcam.py          # Automated tests: MacBook webcam integration & mock streaming (9 tests)
 ├── assets/                     # Sprites, textures, and map assets (.gitkeep)
 └── screenshots/                # Rendered UI screenshots and visual validation (.gitkeep)
 ```
@@ -239,25 +243,65 @@ While this discrete simulation effectively validates path planning and real-time
 
 ---
 
-## 📷 Webcam Setup & Permission Troubleshooting
+## 📷 Day 4: Reliable MacBook Webcam Integration Architecture
 
-The perception module uses OpenCV with native **AVFoundation** on macOS (`cv2.CAP_AVFOUNDATION`) and asynchronous background frame capture to ensure the Pygame simulation never freezes. Camera availability is completely optional: **if no webcam is present or permission is denied, the simulation continues to run normally**.
+### 1. Device Selection & iPhone Continuity Camera Bypass
+On macOS Sonoma and later, Apple's Continuity Camera often registers a paired iPhone as an available video input device. When opening camera index 0 without device inspection, OpenCV can accidentally connect to the iPhone instead of the MacBook's physical camera, causing unwanted connection alerts and chime sounds.
 
-### macOS Permissions
-1. When running from a terminal for the first time, macOS may present a permission dialog: `"[Terminal] would like to access the camera"`. Click **OK**.
+Our detection architecture in `perception/webcam.py` resolves this reliably:
+- **Priority 1: Environment Override:** Inspects `MACBOOK_CAMERA_INDEX` (e.g. `export MACBOOK_CAMERA_INDEX=0`).
+- **Priority 2: System Profiler Discovery:** Parses `system_profiler -json SPCameraDataType` non-intrusively without opening any camera handles. It inspects device model IDs and names, explicitly filtering out any device containing `"iPhone"` while targeting `"FaceTime HD Camera"` or `"built-in"`. On MacBook Air, this maps index `0` to the built-in camera and index `1` to the iPhone.
+- **Priority 3: Hardware Fallback:** Defaults safely to index `0`.
+- **Command-Line Configuration:** Allows explicit override via `python main.py --camera-index <int>`.
+
+### 2. Multi-Threaded Capture & Sensor Warmup Handling
+Hardware cameras on macOS AVFoundation require a brief sensor warmup period (~100–200 ms) before the first valid frame is returned:
+- **Asynchronous Worker Thread:** Frame capture runs inside `_capture_worker` on a dedicated daemon thread, decoupling video I/O from the 60 FPS Pygame simulation loop.
+- **Warmup Tolerance:** Tolerates initial empty frames during hardware startup, only declaring an initialization failure if no valid frames arrive within 2.5 seconds.
+- **Latency-Free Bounded Buffer:** Stores only the most recent frame (`_latest_frame`) under a thread lock (bounded buffer depth of 1), completely eliminating frame delay and memory buildup.
+- **Rolling FPS:** Continuously calculates rolling frames-per-second and image resolution.
+- **Disconnection Detection:** Detects sustained frame read errors (>1.5s) and cleanly transitions the system to `CameraState.ERROR` without crashing.
+
+### 3. Simulation & HUD Telemetry States
+The HUD sidebar dynamically reports camera operational states:
+- `OFF`: Camera is idle (Press `C` to toggle).
+- `STARTING`: Establishing AVFoundation session and warming up sensor.
+- `ACTIVE`: Streaming verified live frames (displays live FPS and resolution, e.g. `ACTIVE (30.0 FPS • 1920x1080)`).
+- `ERROR`: Hardware unavailable or permissions denied with a clear reason.
+
+### 4. Standalone Live Verification Utility
+To verify live camera streaming independently of the Pygame simulation, run the standalone test tool:
+
+```bash
+python tools/test_webcam_live.py
+```
+*(Optionally specify an index: `python tools/test_webcam_live.py --camera-index 0`)*
+
+Features:
+- Connects **only** to the verified MacBook camera; never probes or switches to an iPhone.
+- Displays a live OpenCV preview window with real-time HUD telemetry (resolution, rolling FPS, frame counter, device index).
+- Exits cleanly and releases hardware upon pressing **`ESC`** or **`q`**.
+
+### 5. macOS Camera Permissions Troubleshooting
+1. When running for the first time, macOS may present a permission dialog: `"[Terminal] would like to access the camera"`. Click **OK**.
 2. If access was denied or the status reads `Unavailable (Check connection/permissions)`:
    - Open **System Settings** → **Privacy & Security** → **Camera**.
    - Toggle **ON** the switch next to your terminal application (e.g., Terminal, iTerm2, or VS Code).
-   - Restart the terminal and launch `python3 main.py`.
+   - Restart the terminal and launch `python main.py`.
+
+### 6. Scope Boundaries & Future Work
+- **Webcam-to-Map Costmap Fusion:** In Day 4, the camera stream provides validated live video frames. Transforming camera pixels into road obstacles and projecting them onto the 2D grid costmap via Inverse Perspective Mapping (IPM) is scheduled for **Day 7**.
+- **YOLO Object Detection:** Deep-learning obstacle detection using YOLO or mobile object detectors is scheduled for **Day 6**.
 
 ---
 
 ## 🧪 Automated Testing & Verification
 
-Automated test suites comprehensively verify environment physics, classical A* planning, autonomous navigation, and dynamic replanning:
+Automated test suites comprehensively verify environment physics, classical A* planning, autonomous navigation, and webcam integration:
 1. `tests/test_day1.py` (8 tests): Baseline grid geometry, obstacle seeding, vehicle boundaries, collision prevention, and webcam lifecycle.
 2. `tests/test_astar.py` (15 tests): Comprehensive A* verification covering Manhattan heuristic admissibility, wall detours, enclosed destinations, start==goal edge cases, invalid coordinate rejection, 4-directional enforcement, move-count accuracy, deterministic repeatability, `RoadEnvironment` integration, route clearing on manual movement, and headless rendering.
 3. `tests/test_day3.py` (11 tests): Autonomous navigation controller, `SPACE` pause/resume, goal arrival detection, dynamic obstacle injection ahead of vehicle, adaptive detour replanning, zero-collision safety guarantee, safe halting on complete path blockage, dynamic obstacle non-overwrite constraints, reset restoration, manual control locking during autonomous mode, selective replanning avoidance for off-route hazards, and headless rendering.
+4. `tests/test_webcam.py` (9 tests): Successful camera initialization and frame capture, RGB color conversion, camera unavailable error handling, sustained read failure detection, repeated toggle idempotence, duplicate session prevention, resource cleanup, environment variable device configuration, iPhone bypass filtering, and decoupling from A* path planning.
 
 Run all tests with:
 ```bash
@@ -267,17 +311,17 @@ python3 -m unittest discover tests
 
 Expected result:
 ```text
-..................................
+...........................................
 ----------------------------------------------------------------------
-Ran 34 tests in 1.25s
+Ran 43 tests in ~2.0s
 
 OK
 ```
 
 ---
 
-## 🔮 Planned Day 4 Work: Road Boundary Cost Fields & Dynamic Weighting
-On Day 4, we will enhance the grid planner with:
+## 🔮 Planned Day 5 Work: Road Boundary Cost Fields & Dynamic Weighting
+On Day 5, we will enhance the grid planner with:
 - **Boundary Cost Fields:** Applying distance-transform cost gradients to heavily penalize proximity to rough road edges, ditch drops, and potholes, encouraging the vehicle to naturally maintain center-lane clearance.
 - **Dynamic Risk Weighting:** Modulating traversal costs near terrain hazards dynamically.
 

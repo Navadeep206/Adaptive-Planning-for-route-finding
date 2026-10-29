@@ -1,100 +1,184 @@
-"""Webcam capture and preview manager using OpenCV.
+"""Webcam capture and preview manager using OpenCV and macOS AVFoundation.
 
-Exclusively targets and connects to the MacBook's built-in FaceTime HD Camera.
+Exclusively targets and connects to the MacBook's verified built-in FaceTime HD Camera.
 Streams continuously without timing out or closing when focus shifts to Pygame.
+Provides clear diagnostics, bounded thread-safe frame access, and robust error recovery.
 """
 
+from enum import Enum
 from typing import Optional, Tuple
 import json
 import logging
+import os
 import subprocess
 import sys
 import threading
 import time
 import cv2
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-def get_macbook_builtin_camera_index() -> int:
-    """Determine the device index for the MacBook's built-in camera.
+class CameraState(str, Enum):
+    """Enumeration of camera operational states."""
+    OFF = "OFF"
+    STARTING = "STARTING"
+    ACTIVE = "ACTIVE"
+    ERROR = "ERROR"
 
-    Inspects macOS system profiler metadata without opening any OpenCV handles,
-    ensuring the iPhone Continuity Camera is never triggered or connected.
+
+def get_macbook_builtin_camera_index() -> int:
+    """Determine the device index for the MacBook's built-in FaceTime camera.
+
+    Prioritizes:
+    1. Environment variable MACBOOK_CAMERA_INDEX (if explicitly set).
+    2. macOS system_profiler SPCameraDataType discovery to identify the exact
+       index of the built-in FaceTime camera while filtering out any paired iPhone /
+       Continuity Camera devices.
+    3. Verified hardware fallback index 0 (standard MacBook built-in camera).
 
     Returns:
         int: Camera device index for the MacBook built-in camera.
     """
+    # 1. Explicit environment override
+    env_index = os.environ.get("MACBOOK_CAMERA_INDEX")
+    if env_index is not None:
+        try:
+            parsed = int(env_index.strip())
+            logger.info("Using explicit camera index %d from MACBOOK_CAMERA_INDEX environment variable.", parsed)
+            return parsed
+        except ValueError:
+            logger.warning("Invalid MACBOOK_CAMERA_INDEX value '%s'; falling back to discovery.", env_index)
+
     if sys.platform != "darwin":
         return 0
 
+    # 2. Query macOS system profiler for camera hardware order
     try:
         raw = subprocess.check_output(
             ["system_profiler", "-json", "SPCameraDataType"],
             text=True,
-            timeout=1.0
+            timeout=2.0
         )
         data = json.loads(raw)
         cams = data.get("SPCameraDataType", [])
 
-        # Check if an iPhone / Continuity Camera is recognized by macOS
-        has_iphone = any(
-            "iphone" in c.get("spcamera_model-id", "").lower() or "iphone" in c.get("_name", "").lower()
-            for c in cams
-        )
+        # Inspect camera metadata in order
+        for idx, cam in enumerate(cams):
+            name = (cam.get("_name") or "").lower()
+            model_id = (cam.get("spcamera_model-id") or "").lower()
 
-        # On macOS AVFoundation, if an iPhone is present, AVFoundation assigns Index 0 to the iPhone
-        # and Index 1 to the MacBook's physical built-in FaceTime HD Camera.
-        # If no iPhone is present, the MacBook camera is at Index 0.
-        if has_iphone:
-            logger.info("macOS has an iPhone paired. Selecting MacBook built-in FaceTime HD camera at index 1.")
-            return 1
+            # Skip iPhone / Continuity Camera devices
+            if "iphone" in name or "iphone" in model_id:
+                logger.debug("Skipping iPhone device '%s' at discovery index %d.", cam.get("_name"), idx)
+                continue
+
+            # Identify built-in FaceTime HD camera
+            if (
+                "facetime" in name
+                or "facetime" in model_id
+                or "built-in" in name
+                or "built-in" in model_id
+                or "internal" in name
+            ):
+                logger.info(
+                    "Identified verified MacBook built-in camera '%s' at AVFoundation index %d.",
+                    cam.get("_name"),
+                    idx
+                )
+                return idx
+
+        # If cams exist and index 0 is not an iPhone, return 0
+        if cams:
+            first_name = (cams[0].get("_name") or "").lower()
+            if "iphone" not in first_name:
+                return 0
+
+        # Verified default on MacBook Air
+        logger.info("Using default MacBook built-in camera index 0.")
         return 0
 
     except Exception as exc:
-        logger.debug("Error checking system_profiler camera list: %s", exc)
+        logger.debug("Could not query system_profiler for cameras (%s); defaulting to index 0.", exc)
         return 0
 
 
 class WebcamManager:
     """Manages OpenCV capture for the MacBook's built-in webcam with non-blocking updates."""
 
-    def __init__(self, device_index: Optional[int] = None, window_title: str = "Sensor Feed: MacBook Built-in Camera"):
+    def __init__(
+        self,
+        device_index: Optional[int] = None,
+        window_title: str = "Sensor Feed: MacBook Built-in Camera"
+    ):
         """Initialize the webcam manager.
 
         Args:
-            device_index: Explicit index, or None to automatically select the MacBook built-in camera.
+            device_index: Explicit device index, or None to automatically select
+                          the MacBook built-in camera.
             window_title: Window title for the OpenCV preview window.
         """
         if device_index is not None:
             self.device_index: int = device_index
+            self.device_name: str = f"Configured Camera (Index {device_index})"
         else:
-            self.device_index: int = get_macbook_builtin_camera_index()
+            self.device_index = get_macbook_builtin_camera_index()
+            self.device_name = "MacBook Built-in Camera"
 
         self.window_title: str = window_title
-        self.device_name: str = "MacBook Built-in Camera"
         self.cap: Optional[cv2.VideoCapture] = None
+        self.state: CameraState = CameraState.OFF
         self.is_preview_active: bool = False
         self.status_message: str = "Standby (Press 'C' to toggle)"
+
+        # Performance & Telemetry
+        self.frame_count: int = 0
+        self.fps: float = 0.0
+        self.resolution: Tuple[int, int] = (0, 0)
+        self._first_frame_captured: bool = False
 
         # Threading and synchronization for non-blocking frame capture
         self._capture_thread: Optional[threading.Thread] = None
         self._thread_running: bool = False
         self._frame_lock: threading.Lock = threading.Lock()
-        self._latest_frame: Optional[object] = None
+        self._latest_frame: Optional[np.ndarray] = None
         self._new_frame_available: bool = False
         self._stream_error: Optional[str] = None
 
-        # Window state
+        # GUI Window state
         self._window_created: bool = False
 
     def is_active(self) -> bool:
-        """Check if the live camera preview is currently streaming."""
-        return self.is_preview_active and self.cap is not None and self.cap.isOpened()
+        """Check if the live camera preview is currently streaming and active."""
+        return (
+            self.is_preview_active
+            and self.state == CameraState.ACTIVE
+            and self.cap is not None
+            and self.cap.isOpened()
+        )
 
     def get_status(self) -> str:
         """Return user-facing status string for the HUD."""
         return self.status_message
+
+    def get_state(self) -> CameraState:
+        """Return the current CameraState enum."""
+        return self.state
+
+    def get_current_frame(self) -> Optional[np.ndarray]:
+        """Return a copy of the latest captured BGR frame in a thread-safe manner."""
+        with self._frame_lock:
+            if self._latest_frame is not None:
+                return self._latest_frame.copy()
+            return None
+
+    def get_current_frame_rgb(self) -> Optional[np.ndarray]:
+        """Return the latest frame converted to RGB color format for display/processing."""
+        frame = self.get_current_frame()
+        if frame is not None:
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        return None
 
     def _get_backend(self) -> int:
         """Select AVFoundation on macOS, default backend on others."""
@@ -103,40 +187,58 @@ class WebcamManager:
         return cv2.CAP_ANY
 
     def start_preview(self) -> bool:
-        """Open the MacBook built-in camera and begin continuous preview.
+        """Open the MacBook built-in camera and begin continuous live capture.
 
         Returns:
             bool: True if camera successfully initialized, False otherwise.
         """
+        # Idempotent: avoid opening duplicate camera handles
         if self.is_preview_active or self.cap is not None:
-            logger.debug("Camera preview is already active; ignoring duplicate start request.")
+            logger.debug("Camera preview is already active or initializing; ignoring duplicate start request.")
             return True
 
-        self.status_message = "Initializing MacBook Camera..."
-        try:
-            backend = self._get_backend()
-            logger.info("Opening %s (index %d) with backend %s",
-                        self.device_name, self.device_index,
-                        "AVFOUNDATION" if backend == cv2.CAP_AVFOUNDATION else "DEFAULT")
+        backend = self._get_backend()
+        backend_name = "AVFOUNDATION" if backend == cv2.CAP_AVFOUNDATION else "DEFAULT"
+        logger.info(
+            "Camera startup requested: device='%s', index=%d, backend=%s",
+            self.device_name,
+            self.device_index,
+            backend_name
+        )
 
+        self.state = CameraState.STARTING
+        self.status_message = "STARTING (Connecting to camera...)"
+
+        try:
             self.cap = cv2.VideoCapture(self.device_index, backend)
 
             if not self.cap.isOpened():
+                self.state = CameraState.ERROR
                 self.status_message = "Unavailable (Check connection/permissions)"
-                logger.warning("Failed to open MacBook camera at index %d.", self.device_index)
+                logger.warning(
+                    "Camera initialization failure: failed to open %s at index %d via backend %s.",
+                    self.device_name,
+                    self.device_index,
+                    backend_name
+                )
                 self.release()
                 return False
 
-            # Configure capture buffer size to reduce latency
+            # Configure capture buffer size to 1 to eliminate frame latency
             try:
                 self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             except Exception:
                 pass
 
-            # Reset synchronization flags
+            logger.info("Camera hardware handle successfully opened: index %d (%s).", self.device_index, self.device_name)
+
+            # Reset synchronization flags and counters
             self._stream_error = None
             self._latest_frame = None
             self._new_frame_available = False
+            self._first_frame_captured = False
+            self.frame_count = 0
+            self.fps = 0.0
             self._thread_running = True
 
             # Launch background worker for non-blocking frame capture
@@ -148,49 +250,106 @@ class WebcamManager:
             self._capture_thread.start()
 
             self.is_preview_active = True
-            self.status_message = "Active (MacBook Built-in Camera)"
             return True
 
         except Exception as exc:
+            self.state = CameraState.ERROR
             self.status_message = f"Error: {exc.__class__.__name__}"
-            logger.error("Unexpected error opening MacBook camera: %s", exc)
+            logger.error("Camera initialization failure with unexpected exception: %s", exc, exc_info=True)
             self.release()
             return False
 
     def _capture_worker(self) -> None:
-        """Background thread worker to grab frames from the MacBook camera at stable intervals."""
-        logger.debug("MacBook webcam capture worker started.")
+        """Background thread worker to grab frames from the camera continuously."""
+        logger.debug("Webcam capture worker thread started for device index %d.", self.device_index)
         consecutive_errors = 0
+        warmup_attempts = 0
+        last_time = time.perf_counter()
+        fps_smoothing = 0.9
 
         while self._thread_running and self.cap is not None:
             try:
                 ret, frame = self.cap.read()
+                now = time.perf_counter()
+                dt = now - last_time
+                last_time = now
+
                 if ret and frame is not None:
                     consecutive_errors = 0
+
+                    # First valid frame capture diagnostic
+                    if not self._first_frame_captured:
+                        h, w = frame.shape[:2]
+                        self.resolution = (w, h)
+                        self._first_frame_captured = True
+                        self.state = CameraState.ACTIVE
+                        logger.info(
+                            "Successful frame capture: live stream verified from %s (Index %d) at %dx%d resolution.",
+                            self.device_name,
+                            self.device_index,
+                            w,
+                            h
+                        )
+
+                    # Update rolling FPS
+                    if dt > 0:
+                        instant_fps = 1.0 / dt
+                        self.fps = (self.fps * fps_smoothing) + (instant_fps * (1.0 - fps_smoothing))
+
                     with self._frame_lock:
                         self._latest_frame = frame
                         self._new_frame_available = True
+                        self.frame_count += 1
+                        self.status_message = (
+                            f"ACTIVE ({self.fps:.1f} FPS • {self.resolution[0]}x{self.resolution[1]})"
+                        )
+
                 else:
+                    # Sensor warmup phase (allow up to 25 empty frames before declaring error)
+                    if not self._first_frame_captured:
+                        warmup_attempts += 1
+                        if warmup_attempts > 25:
+                            logger.warning(
+                                "Camera initialization failure: sensor warmup timeout (>2.5s) on index %d.",
+                                self.device_index
+                            )
+                            with self._frame_lock:
+                                self.state = CameraState.ERROR
+                                self._stream_error = "Unavailable (Sensor warmup timeout)"
+                            break
+                        time.sleep(0.1)
+                        continue
+
+                    # Stream disruption after already capturing frames
                     consecutive_errors += 1
-                    # Only flag disconnection after 5 full seconds of continuous hardware failure
-                    if consecutive_errors > 150:
-                        logger.warning("Sustained frame read failure (>5s) on MacBook camera.")
+                    if consecutive_errors > 45:  # ~1.5 seconds of sustained read failures
+                        logger.warning(
+                            "Frame capture failure: sustained read errors (>1.5s) on %s (Index %d).",
+                            self.device_name,
+                            self.device_index
+                        )
                         with self._frame_lock:
-                            self._stream_error = "Disconnected (Frame read error)"
+                            self.state = CameraState.ERROR
+                            self._stream_error = "Error: Camera disconnected / frame read failure"
                         break
 
-                # Sleep 15ms (~60 FPS) to pace the capture thread and avoid exhausting the AVFoundation queue
+                # Sleep 15ms (~60 FPS) to pace capture and avoid consuming excessive CPU
                 time.sleep(0.015)
 
             except Exception as exc:
-                logger.error("Exception in capture worker thread: %s", exc)
+                logger.error("Exception in camera capture worker thread: %s", exc)
                 time.sleep(0.05)
 
-        logger.debug("MacBook webcam capture worker exiting.")
+        logger.debug("Webcam capture worker thread exiting.")
 
     def stop_preview(self) -> None:
-        """Stop preview stream, release camera hardware handle, and destroy window."""
+        """Stop preview stream, release camera hardware handle, and destroy preview window."""
+        if not self.is_preview_active and self.cap is None and self.state == CameraState.OFF:
+            return
+
+        logger.info("Camera preview disabled: stopping stream for %s (Index %d).", self.device_name, self.device_index)
         self.is_preview_active = False
+        self.state = CameraState.OFF
         self.status_message = "Standby (Press 'C' to toggle)"
         self.release()
 
@@ -205,7 +364,7 @@ class WebcamManager:
             return False
         return self.start_preview()
 
-    def update(self) -> Tuple[bool, Optional[object]]:
+    def update(self) -> Tuple[bool, Optional[np.ndarray]]:
         """Fetch latest frame and render OpenCV preview window if active.
 
         Must be called on the main thread for Cocoa GUI compatibility.
@@ -216,11 +375,12 @@ class WebcamManager:
         if not self.is_preview_active:
             return False, None
 
-        # Check for stream errors reported by worker
+        # Check for stream errors reported by background worker
         with self._frame_lock:
             if self._stream_error:
                 err_msg = self._stream_error
                 self.stop_preview()
+                self.state = CameraState.ERROR
                 self.status_message = err_msg
                 return False, None
 
@@ -229,7 +389,7 @@ class WebcamManager:
                 frame_to_display = self._latest_frame
                 self._new_frame_available = False
 
-        # Render frame in OpenCV window
+        # Render frame in OpenCV window if a new frame is ready
         if frame_to_display is not None:
             try:
                 cv2.imshow(self.window_title, frame_to_display)
@@ -237,36 +397,44 @@ class WebcamManager:
             except Exception as exc:
                 logger.error("Error during cv2.imshow: %s", exc)
                 self.stop_preview()
+                self.state = CameraState.ERROR
+                self.status_message = f"Error: GUI display failed ({exc.__class__.__name__})"
                 return False, None
 
         # Process Cocoa window events (1ms delay)
-        # Does NOT automatically close when window loses focus to Pygame!
+        # Allows closing preview via 'Q' key or ESC inside the OpenCV window
         if self._window_created:
             key = cv2.waitKey(1) & 0xFF
-            # Allow closing preview via 'Q' key inside the OpenCV window
-            if key in (ord('q'), ord('Q')):
+            if key in (ord('q'), ord('Q'), 27):
+                logger.info("Preview disabled by user key event in OpenCV window.")
                 self.stop_preview()
                 return False, None
 
         return (frame_to_display is not None), frame_to_display
 
     def release(self) -> None:
-        """Release capture device and clean up all OpenCV windows safely."""
+        """Safely release camera hardware handles and destroy OpenCV windows.
+
+        This method is strictly idempotent and safe to call multiple times.
+        """
         self.is_preview_active = False
         self._thread_running = False
 
+        # Terminate capture thread cleanly
         if self._capture_thread is not None and self._capture_thread.is_alive():
-            self._capture_thread.join(timeout=0.25)
+            self._capture_thread.join(timeout=0.5)
         self._capture_thread = None
 
+        # Release OpenCV VideoCapture handle
         if self.cap is not None:
             try:
                 self.cap.release()
-                logger.info("MacBook camera device %d released.", self.device_index)
+                logger.info("Resource cleanup: released VideoCapture hardware handle for index %d.", self.device_index)
             except Exception as exc:
-                logger.debug("Error releasing VideoCapture: %s", exc)
+                logger.debug("Error releasing VideoCapture handle: %s", exc)
             self.cap = None
 
+        # Clean up OpenCV windows
         if self._window_created:
             try:
                 cv2.destroyWindow(self.window_title)
