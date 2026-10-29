@@ -1,109 +1,3 @@
-# Adaptive Path Planning and Collision Avoidance for Autonomous Vehicles on Unstructured Roads
-
-An academic and engineering project developing an adaptive path planning and collision avoidance architecture for autonomous ground vehicles (AGVs) operating on unstructured, unpaved, and irregular roads.
-
----
-
-## 📌 Project Roadmap Overview
-This 10-day project incrementally constructs an autonomous navigation system designed for off-road and rural environments lacking painted lane markings:
-- **Day 1 (Current): Modular Architecture, Simulation Grid Baseline & Perception Hooks**
-- **Day 2:** Classical Path Planning (A* Search on Grid Maps)
-- **Day 3:** Unstructured Road Boundary Cost Fields & Dynamic Weighting
-- **Day 4:** Static Collision Avoidance & Local Replanning
-- **Day 5:** Computer Vision Preprocessing for Off-Road Terrain
-- **Day 6:** Visual Obstacle Detection Baseline
-- **Day 7:** Sensor-Grid Fusion (Mapping Vision Detections to Costmap)
-- **Day 8:** Dynamic Moving Obstacle Avoidance
-- **Day 9:** Closed-Loop Autonomous Navigation Simulation
-- **Day 10:** Performance Benchmarking, Robustness Testing & Final Documentation
-
----
-
-## 🎯 Day 1 Scope & Objectives
-Day 1 establishes a modular, reproducible, and verifiable engineering foundation:
-1. **Interactive Simulation Window:** A 1000 × 700 Pygame environment rendering a 2D unstructured-road terrain grid.
-2. **Organic Road Boundaries:** A visually distinct, winding drivable unpaved roadway with irregular boundaries and off-road non-drivable verges.
-3. **Entity Markers:**
-   - 🟦 **Vehicle (Agent):** Starts at designated coordinates `(12, 2)`.
-   - 🟨 **Destination (Goal):** Positioned at `(15, 20)`.
-   - 🟥 **Static Obstacles:** Multiple hazards (boulders, potholes, debris) placed on the road surface.
-4. **Collision & Boundary Enforcement:** Manual step verification via W/A/S/D or Arrow keys that enforces strict boundaries—blocking moves outside the drivable road corridor or into obstacles.
-5. **Perception Feed Integration:** An OpenCV-powered camera manager with toggleable live preview (`C` key), non-blocking execution, and graceful hardware/permission fallback.
-6. **Telemetry & Legend HUD:** Real-time system status card, sensor status, color legend, and controls guide.
-
-> [!NOTE]
-> **Day 1 Limitation Notice:** Autonomous path planning (A*) and computer vision obstacle segmentation are intentionally **not** implemented on Day 1. Manual keyboard navigation is provided strictly for environment validation and collision checking.
-
----
-
-## 📂 Project Directory Structure
-
-```text
-adaptive-path-planning/
-├── main.py                     # Application entry point and simulation loop
-├── requirements.txt            # Locked minimum dependencies (Pygame, OpenCV, NumPy)
-├── README.md                   # Comprehensive documentation and runbook
-├── .gitignore                  # Git exclusions for Python bytecode and venvs
-├── perception/
-│   ├── __init__.py             # Perception package initialization
-│   └── webcam.py               # Modular OpenCV webcam manager with error handling
-├── simulation/
-│   ├── __init__.py             # Simulation package initialization
-│   └── environment.py          # 2D unstructured road environment and HUD rendering
-├── tests/
-│   └── test_day1.py            # Automated unit and integration test suite
-├── assets/                     # Sprites, textures, and map assets (.gitkeep)
-└── screenshots/                # Rendered UI screenshots and visual validation (.gitkeep)
-```
-
----
-
-## 💻 Prerequisites
-- **Python:** Version `3.8+` (Tested on Python `3.9.6` and `3.11+`)
-- **OS Support:** macOS (Apple Silicon & Intel), Linux (Ubuntu/Debian), Windows 10/11
-- **Hardware (Optional):** USB or integrated webcam for sensor preview
-
----
-
-## 🚀 Virtual Environment Setup & Installation
-
-### On macOS / Linux
-```bash
-# 1. Clone or navigate to the project directory
-cd "Adaptive Path Planing"
-
-# 2. Create a virtual environment
-python3 -m venv venv
-
-# 3. Activate the virtual environment
-source venv/bin/activate
-
-# 4. Upgrade pip and install dependencies
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### On Windows (Command Prompt / PowerShell)
-```cmd
-:: 1. Navigate to the project directory
-cd "Adaptive Path Planing"
-
-:: 2. Create a virtual environment
-python -m venv venv
-
-:: 3. Activate the virtual environment
-:: In Command Prompt (cmd):
-venv\Scripts\activate.bat
-:: In PowerShell:
-venv\Scripts\Activate.ps1
-
-:: 4. Upgrade pip and install dependencies
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
----
-
 ## ▶️ Running the Application
 
 Ensure the virtual environment is activated, then run:
@@ -193,3 +87,46 @@ On Day 2, we will implement:
 - Admissible heuristic functions (Euclidean and Manhattan distance).
 - Continuous path extraction avoiding all static hazards and off-road verges.
 - Dynamic visualization of explored nodes (closed set) and the calculated optimal path.
+- **Static Obstacles:** Total number of active static road hazards.
+
+---
+
+## 📷 Webcam Setup & Permission Troubleshooting
+
+The perception module uses OpenCV with native **AVFoundation** on macOS (`cv2.CAP_AVFOUNDATION`) and asynchronous background frame capture to ensure the Pygame simulation never freezes. Camera availability is completely optional: **if no webcam is present or permission is denied, the simulation continues to run normally**.
+
+### macOS Permissions
+1. When running from a terminal for the first time, macOS may present a permission dialog: `"[Terminal] would like to access the camera"`. Click **OK**.
+2. If access was denied or the status reads `Unavailable (Check connection/permissions)`:
+   - Open **System Settings** → **Privacy & Security** → **Camera**.
+   - Toggle **ON** the switch next to your terminal application (e.g., Terminal, iTerm2, or VS Code).
+   - Restart the terminal and launch `python3 main.py`.
+
+---
+
+## 🧪 Automated Testing & Verification
+
+Automated test suites verify both baseline environment physics and Day 2 A* planning:
+1. `tests/test_day1.py`: Baseline grid geometry, obstacle seeding, vehicle boundaries, collision prevention, and webcam lifecycle.
+2. `tests/test_astar.py`: Comprehensive A* verification covering Manhattan heuristic admissibility, wall detours, enclosed destinations, start==goal edge cases, invalid coordinate rejection, 4-directional enforcement, move-count accuracy, deterministic repeatability, `RoadEnvironment` integration, route clearing on manual movement, and headless rendering.
+
+Run all tests with:
+```bash
+source venv/bin/activate
+python3 -m unittest discover tests
+```
+
+Expected result:
+```text
+Ran 23 tests in ~0.65s
+OK
+```
+
+---
+
+## 🔮 Planned Day 3 Work: Boundary Cost Fields & Traversal
+On Day 3, we will implement:
+- **Boundary Cost Fields:** Penalizing traversal near rough road edges and potholes to keep the vehicle centered on the road corridor.
+- **Autonomous Traversal:** Enabling the vehicle to autonomously step along the computed A* trajectory with configurable speed and pacing.
+- **Dynamic Replanning:** Recalculating routes on the fly if obstacles appear or shift.
+

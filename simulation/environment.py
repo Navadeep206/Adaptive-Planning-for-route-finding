@@ -10,6 +10,8 @@ import math
 import numpy as np
 import pygame
 
+from planning.astar import AStarPlanner, AStarResult
+
 
 class CellType(IntEnum):
     """Enumeration of cell types across the terrain grid."""
@@ -38,6 +40,9 @@ class RoadEnvironment:
     COLOR_VEHICLE: Tuple[int, int, int] = (33, 150, 243)       # Electric blue vehicle marker
     COLOR_DESTINATION: Tuple[int, int, int] = (255, 214, 10)   # Yellow destination goal
     COLOR_OBSTACLE: Tuple[int, int, int] = (239, 68, 68)       # Coral red obstacle marker
+    COLOR_PATH: Tuple[int, int, int] = (34, 197, 94)          # Emerald green planned path
+    COLOR_PATH_ACCENT: Tuple[int, int, int] = (134, 239, 172) # Luminous light green path beads
+    COLOR_PATH_LINE: Tuple[int, int, int] = (74, 222, 128)    # Route trajectory line
 
     # Typography Colors
     COLOR_TEXT_PRIMARY: Tuple[int, int, int] = (243, 244, 246)
@@ -73,8 +78,17 @@ class RoadEnvironment:
         self.vehicle_pos: Tuple[int, int] = self.start_pos
 
         # Feedback & interaction telemetry
-        self.last_action_msg: str = "Ready. Use WASD / Arrow keys to test manual movement."
+        self.last_action_msg: str = "Ready. Press 'P' to compute A* route or WASD for manual movement."
         self.last_action_status: str = "normal"  # "normal", "success", "blocked"
+
+        # A* Path planning telemetry & state (Day 2)
+        self.planner: AStarPlanner = AStarPlanner(default_drivable_value=int(CellType.DRIVABLE_ROAD))
+        self.planned_path: List[Tuple[int, int]] = []
+        self.planning_result: Optional[AStarResult] = None
+        self.planning_status: str = "Press P to plan"  # "Path found", "No valid path", or "Press P to plan"
+        self.path_length: int = 0
+        self.explored_nodes_count: int = 0
+        self.planning_time_ms: float = 0.0
 
         # Generate unstructured road contours and obstacles
         self._build_unstructured_road()
@@ -123,9 +137,15 @@ class RoadEnvironment:
                         self.obstacle_set.add((r, c))
 
     def reset_vehicle(self) -> None:
-        """Reset the vehicle to its designated starting position."""
+        """Reset the vehicle to its designated starting position and clear previous route."""
         self.vehicle_pos = self.start_pos
-        self.last_action_msg = "Vehicle reset to starting coordinates."
+        self.planned_path = []
+        self.planning_result = None
+        self.planning_status = "Press P to plan"
+        self.path_length = 0
+        self.explored_nodes_count = 0
+        self.planning_time_ms = 0.0
+        self.last_action_msg = "Vehicle reset to start. Previous route cleared."
         self.last_action_status = "normal"
 
     def move_vehicle(self, d_row: int, d_col: int) -> bool:
@@ -164,14 +184,54 @@ class RoadEnvironment:
 
         # Valid movement executed
         self.vehicle_pos = (target_r, target_c)
+
+        # Clear stale path when vehicle is moved manually
+        if self.planned_path:
+            self.planned_path = []
+            self.planning_result = None
+            self.planning_status = "Press P to plan"
+            self.path_length = 0
+            self.explored_nodes_count = 0
+            self.planning_time_ms = 0.0
+
         if self.vehicle_pos == self.destination_pos:
             self.last_action_msg = "Goal Reached! Vehicle arrived at destination marker."
             self.last_action_status = "success"
         else:
-            self.last_action_msg = f"Vehicle moved to cell ({target_c}, {target_r})."
+            self.last_action_msg = f"Vehicle moved to cell ({target_c}, {target_r}). Press 'P' to plan route."
             self.last_action_status = "normal"
 
         return True
+
+    def plan_path(self) -> AStarResult:
+        """Calculate an optimal A* path from current vehicle position to destination.
+
+        Returns:
+            AStarResult: Result of search query containing path, cost, and telemetry.
+        """
+        result = self.planner.plan(
+            grid=self.grid,
+            start=self.vehicle_pos,
+            goal=self.destination_pos,
+            drivable_values={int(CellType.DRIVABLE_ROAD)}
+        )
+        self.planning_result = result
+        self.planning_time_ms = result.execution_time_ms
+        self.explored_nodes_count = result.explored_nodes
+        self.path_length = result.path_length
+
+        if result.success:
+            self.planned_path = result.path
+            self.planning_status = "Path found"
+            self.last_action_msg = f"A* Path found: {result.path_length} moves, {result.explored_nodes} explored ({result.execution_time_ms:.2f} ms)."
+            self.last_action_status = "success"
+        else:
+            self.planned_path = []
+            self.planning_status = "No valid path"
+            self.last_action_msg = f"No valid path: {result.message}"
+            self.last_action_status = "blocked"
+
+        return result
 
     def render(self, screen: pygame.Surface, fonts: dict, webcam_status: str) -> None:
         """Render the complete simulation frame: header, terrain grid, entities, and sidebar HUD.
@@ -185,6 +245,7 @@ class RoadEnvironment:
 
         self._render_header(screen, fonts)
         self._render_grid(screen)
+        self._render_path(screen)
         self._render_entities(screen, fonts)
         self._render_sidebar(screen, fonts, webcam_status)
         self._render_footer(screen, fonts)
@@ -194,7 +255,7 @@ class RoadEnvironment:
         title_surf = fonts["title"].render(self.WINDOW_TITLE, True, self.COLOR_TEXT_PRIMARY)
         screen.blit(title_surf, (self.grid_origin_x, 18))
 
-        sub_text = "Autonomous Navigation on Unstructured Roads  |  Day 1: System Baseline & Environment Setup"
+        sub_text = "Autonomous Navigation on Unstructured Roads  |  Day 2: Classical A* Path Planning"
         sub_surf = fonts["small"].render(sub_text, True, self.COLOR_ACCENT_CYAN)
         screen.blit(sub_surf, (self.grid_origin_x, 52))
 
@@ -233,6 +294,40 @@ class RoadEnvironment:
             self.rows * self.cell_size
         )
         pygame.draw.rect(screen, self.COLOR_PANEL_BORDER, grid_boundary, 2)
+
+    def _render_path(self, screen: pygame.Surface) -> None:
+        """Render the planned A* route as visible green cells and a continuous trajectory line."""
+        if not self.planned_path:
+            return
+
+        # 1. Draw glowing transparent green highlight over all path cells
+        path_cell_surf = pygame.Surface((self.cell_size, self.cell_size), pygame.SRCALPHA)
+        path_cell_surf.fill((34, 197, 94, 90))  # Emerald green with subtle transparency
+
+        for r, c in self.planned_path:
+            px = self.grid_origin_x + c * self.cell_size
+            py = self.grid_origin_y + r * self.cell_size
+            screen.blit(path_cell_surf, (px, py))
+            inner_rect = pygame.Rect(px + 1, py + 1, self.cell_size - 2, self.cell_size - 2)
+            pygame.draw.rect(screen, (74, 222, 128, 140), inner_rect, 1)
+
+        # 2. Draw continuous trajectory line connecting cell center points
+        if len(self.planned_path) > 1:
+            points = [
+                (
+                    self.grid_origin_x + c * self.cell_size + self.cell_size // 2,
+                    self.grid_origin_y + r * self.cell_size + self.cell_size // 2,
+                )
+                for r, c in self.planned_path
+            ]
+            # Outer dark green line for contrast
+            pygame.draw.lines(screen, (20, 83, 45), False, points, 5)
+            # Inner bright emerald core line
+            pygame.draw.lines(screen, self.COLOR_PATH_LINE, False, points, 3)
+
+            # Node beads along trajectory
+            for pt in points:
+                pygame.draw.circle(screen, self.COLOR_PATH_ACCENT, pt, 3)
 
     def _render_entities(self, screen: pygame.Surface, fonts: dict) -> None:
         """Render static obstacles, destination marker, and the vehicle."""
@@ -273,34 +368,49 @@ class RoadEnvironment:
         card_w = self.sidebar_width
         curr_y = self.grid_origin_y
 
-        # Card 1: System Telemetry
-        card1_h = 175
-        self._draw_panel_box(screen, card_x, curr_y, card_w, card1_h, "SYSTEM TELEMETRY")
+        # Card 1: System & A* Path Telemetry
+        card1_h = 205
+        self._draw_panel_box(screen, card_x, curr_y, card_w, card1_h, "A* PATH PLANNING & TELEMETRY")
         
         veh_r, veh_c = self.vehicle_pos
         dest_r, dest_c = self.destination_pos
         manhattan_dist = abs(dest_r - veh_r) + abs(dest_c - veh_c)
 
+        path_length_str = f"{self.path_length} moves" if self.planned_path else "None"
+        explored_str = f"{self.explored_nodes_count} cells" if self.explored_nodes_count > 0 else "0"
+        time_str = f"{self.planning_time_ms:.2f} ms" if self.planning_time_ms > 0 else "N/A"
+
+        status_val_color = self.COLOR_TEXT_SECONDARY
+        if self.planning_status == "Path found":
+            status_val_color = self.COLOR_ACCENT_GREEN
+        elif self.planning_status == "No valid path":
+            status_val_color = self.COLOR_OBSTACLE
+        elif self.planning_status == "Press P to plan":
+            status_val_color = self.COLOR_ACCENT_AMBER
+
         lines_telemetry = [
-            ("Execution Mode:", "Manual Test (Day 1)"),
-            ("Vehicle Pos (X, Y):", f"({veh_c}, {veh_r})"),
-            ("Destination (X, Y):", f"({dest_c}, {dest_r})"),
-            ("Distance to Goal:", f"{manhattan_dist} cells (L1)"),
-            ("Static Obstacles:", f"{len(self.obstacle_set)} hazards"),
+            ("Execution Mode:", "Manual + A* (Day 2)", self.COLOR_TEXT_PRIMARY),
+            ("Vehicle Pos (X, Y):", f"({veh_c}, {veh_r})", self.COLOR_TEXT_PRIMARY),
+            ("Destination (X, Y):", f"({dest_c}, {dest_r})", self.COLOR_TEXT_PRIMARY),
+            ("Heuristic (L1):", f"{manhattan_dist} cells", self.COLOR_TEXT_PRIMARY),
+            ("Planning Status:", self.planning_status, status_val_color),
+            ("Path Length:", path_length_str, self.COLOR_ACCENT_GREEN if self.planned_path else self.COLOR_TEXT_PRIMARY),
+            ("Explored Nodes:", explored_str, self.COLOR_TEXT_PRIMARY),
+            ("Execution Time:", time_str, self.COLOR_TEXT_PRIMARY),
         ]
 
-        ty = curr_y + 36
-        for label, val in lines_telemetry:
+        ty = curr_y + 32
+        for label, val, val_color in lines_telemetry:
             lbl_surf = fonts["small"].render(label, True, self.COLOR_TEXT_SECONDARY)
-            val_surf = fonts["mono_small"].render(val, True, self.COLOR_TEXT_PRIMARY)
+            val_surf = fonts["mono_small"].render(val, True, val_color)
             screen.blit(lbl_surf, (card_x + 14, ty))
             screen.blit(val_surf, (card_x + card_w - val_surf.get_width() - 14, ty))
-            ty += 23
+            ty += 21
 
-        curr_y += card1_h + 12
+        curr_y += card1_h + 10
 
         # Card 2: Perception / Webcam Status
-        card2_h = 75
+        card2_h = 65
         self._draw_panel_box(screen, card_x, curr_y, card_w, card2_h, "PERCEPTION & SENSORS")
         status_color = self.COLOR_ACCENT_GREEN if "Active" in webcam_status else self.COLOR_TEXT_SECONDARY
         if "Unavailable" in webcam_status or "Denied" in webcam_status or "Error" in webcam_status:
@@ -308,23 +418,24 @@ class RoadEnvironment:
 
         cam_lbl = fonts["small"].render("Webcam Feed:", True, self.COLOR_TEXT_SECONDARY)
         cam_val = fonts["small"].render(webcam_status, True, status_color)
-        screen.blit(cam_lbl, (card_x + 14, curr_y + 32))
-        screen.blit(cam_val, (card_x + 14, curr_y + 50))
+        screen.blit(cam_lbl, (card_x + 14, curr_y + 28))
+        screen.blit(cam_val, (card_x + 14, curr_y + 44))
 
-        curr_y += card2_h + 12
+        curr_y += card2_h + 10
 
         # Card 3: Color Legend
-        card3_h = 135
-        self._draw_panel_box(screen, card_x, curr_y, card_w, card3_h, "TERRAIN LEGEND")
+        card3_h = 152
+        self._draw_panel_box(screen, card_x, curr_y, card_w, card3_h, "TERRAIN & ROUTE LEGEND")
         legend_items = [
             (self.COLOR_VEHICLE, "Vehicle (Autonomous Agent)"),
             (self.COLOR_DESTINATION, "Target Navigation Destination"),
             (self.COLOR_OBSTACLE, "Static Hazard (Pothole / Boulder)"),
+            (self.COLOR_PATH, "Planned Route (A* Path)"),
             (self.COLOR_DRIVABLE_ROAD, "Drivable Unstructured Road"),
             (self.COLOR_BORDER_TERRAIN, "Non-Drivable Verge / Shoulder"),
         ]
 
-        ly = curr_y + 32
+        ly = curr_y + 28
         for color, name in legend_items:
             swatch_rect = pygame.Rect(card_x + 14, ly + 2, 14, 14)
             pygame.draw.rect(screen, color, swatch_rect, border_radius=3)
@@ -334,20 +445,20 @@ class RoadEnvironment:
             screen.blit(name_surf, (card_x + 36, ly))
             ly += 20
 
-        curr_y += card3_h + 12
+        curr_y += card3_h + 10
 
         # Card 4: Keyboard Controls Guide
-        card4_h = 140
+        card4_h = 142
         self._draw_panel_box(screen, card_x, curr_y, card_w, card4_h, "KEYBOARD CONTROLS")
         controls = [
+            ("P Key", "Compute A* optimal route"),
+            ("R Key", "Reset vehicle & clear route"),
             ("W / A / S / D", "Move vehicle (Grid steps)"),
-            ("Arrow Keys", "Alternate movement"),
-            ("R Key", "Reset vehicle position"),
             ("C Key", "Toggle webcam stream"),
             ("ESC Key", "Safe application exit"),
         ]
 
-        cy = curr_y + 30
+        cy = curr_y + 28
         for key_str, desc in controls:
             k_surf = fonts["mono_small"].render(key_str, True, self.COLOR_ACCENT_AMBER)
             d_surf = fonts["small"].render(desc, True, self.COLOR_TEXT_SECONDARY)

@@ -1,7 +1,8 @@
-"""Main entry point for Day 1: Adaptive Path Planning Simulation Environment.
+"""Main entry point for Day 2: Adaptive Path Planning Simulation Environment.
 
-Sets up the Pygame rendering loop, handles interactive keyboard controls,
-coordinates the OpenCV webcam stream, and manages clean system shutdown.
+Sets up the Pygame rendering loop, handles interactive keyboard controls (including
+A* path computation via 'P' and reset via 'R'), coordinates the OpenCV webcam stream,
+and manages clean system shutdown.
 """
 
 import argparse
@@ -89,6 +90,17 @@ def main() -> None:
                         logger.info("Exit requested via ESC key.")
                         running = False
 
+                    # A* Path planning calculation
+                    elif event.key == pygame.K_p:
+                        result = env.plan_path()
+                        logger.info(
+                            "A* planning triggered: success=%s, moves=%d, explored=%d, time=%.2f ms",
+                            result.success,
+                            result.path_length,
+                            result.explored_nodes,
+                            result.execution_time_ms
+                        )
+
                     # Manual vehicle navigation: W/A/S/D or Arrow keys
                     elif event.key in (pygame.K_w, pygame.K_UP):
                         env.move_vehicle(-1, 0)
@@ -99,9 +111,10 @@ def main() -> None:
                     elif event.key in (pygame.K_d, pygame.K_RIGHT):
                         env.move_vehicle(0, 1)
 
-                    # Reset vehicle position
+                    # Reset vehicle position and clear route
                     elif event.key == pygame.K_r:
                         env.reset_vehicle()
+                        logger.info("Vehicle and route reset to initial state.")
 
                     # Toggle OpenCV webcam preview
                     elif event.key == pygame.K_c:
