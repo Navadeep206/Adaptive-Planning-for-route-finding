@@ -1,0 +1,3 @@
+frame_source,resolution,model_name,device,capture_ms,inference_median_ms,inference_mean_ms,drawing_ms,total_pipeline_ms,effective_fps,detections_count,detected_classes
+assets/webcam_sample.jpg,1280x720,yolo11n.pt,cpu,,33.828666000000226,33.87217486666664,0.13520849999970608,33.96387449999993,29.4430483777698,0,
+screenshots/day1_simulation_preview.png,1000x700,yolo11n.pt,cpu,,38.73691700000048,42.19765560000007,0.10629200000034089,38.843209000000826,25.74452589640518,0,

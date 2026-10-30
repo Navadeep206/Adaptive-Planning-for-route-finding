@@ -90,85 +90,72 @@ def run_live_detection_demo(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    # 2. Initialize Webcam Manager using existing verified camera index
-    camera_idx = args.camera_index if args.camera_index is not None else get_macbook_builtin_camera_index()
-    logger.info("Connecting to camera device at verified index %d...", camera_idx)
+    # 2. Initialize Webcam Manager using verified MacBook camera configuration
+    window_title = f"Live Perception: YOLO Detection ({args.model})"
+    webcam = WebcamManager(device_index=args.camera_index, window_title=window_title)
 
-    # We use cv2.VideoCapture directly here to be a dedicated, single-owner live process
-    backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
-    cap = cv2.VideoCapture(camera_idx, backend)
-
-    if not cap.isOpened():
+    logger.info("Connecting to %s at index %d...", webcam.device_name, webcam.device_index)
+    if not webcam.start_preview():
         logger.error(
-            "Cannot open camera index %d! If another application (like main.py) is "
+            "Cannot open %s (Index %d)! If another application (like main.py) is "
             "currently running and owning the camera, please close it first.",
-            camera_idx
+            webcam.device_name,
+            webcam.device_index
         )
         sys.exit(1)
 
-    try:
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    except Exception:
-        pass
-
-    window_title = f"Live Perception: YOLO Detection ({args.model})"
-    cv2.namedWindow(window_title, cv2.WINDOW_AUTOSIZE)
-
-    frame_count = 0
-    fps = 0.0
-    last_time = time.perf_counter()
-
     logger.info("Camera opened successfully. Starting live object detection stream...")
 
+    last_detections = []
+    last_inf_ms = None
+    frame_count = 0
+    consecutive_empty = 0
+
     try:
-        while True:
-            ret, frame = cap.read()
-            now = time.perf_counter()
-            dt = now - last_time
-            last_time = now
+        while webcam.is_active():
+            frame = webcam.get_current_frame()
+            display_frame = None
 
-            if not ret or frame is None:
-                time.sleep(0.01)
-                continue
+            if frame is not None:
+                frame_count += 1
 
-            frame_count += 1
-            if dt > 0:
-                fps = (fps * 0.9) + ((1.0 / dt) * 0.1)
+                # Perform local YOLO detection
+                last_detections, last_inf_ms = detector.detect(frame)
 
-            # Perform local YOLO detection
-            detections, inf_time_ms = detector.detect(frame)
+                if len(last_detections) == 0:
+                    consecutive_empty += 1
+                    if consecutive_empty % 100 == 1:
+                        logger.debug("Detections: 0 (No objects meeting confidence threshold %.2f)", args.conf)
+                else:
+                    consecutive_empty = 0
 
-            # Annotate frame with detections and HUD
-            annotated_frame = detector.draw_detections(frame, detections, inf_time_ms)
+                # Annotate frame with detections and HUD
+                annotated_frame = detector.draw_detections(frame, last_detections, last_inf_ms)
 
-            # Add FPS telemetry at top-right
-            h, w = annotated_frame.shape[:2]
-            fps_text = f"Stream FPS: {fps:.1f}"
-            cv2.putText(
-                annotated_frame,
-                fps_text,
-                (w - 180, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (0, 255, 0),
-                1,
-                cv2.LINE_AA
-            )
+                # Add FPS telemetry at top-right
+                h, w = annotated_frame.shape[:2]
+                fps_text = f"Stream FPS: {webcam.fps:.1f}"
+                cv2.putText(
+                    annotated_frame,
+                    fps_text,
+                    (w - 180, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (0, 255, 0),
+                    1,
+                    cv2.LINE_AA
+                )
+                display_frame = annotated_frame
 
-            cv2.imshow(window_title, annotated_frame)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key in (27, ord('q'), ord('Q')):
-                logger.info("Exit requested via keypress.")
-                break
+            webcam.update(display_frame=display_frame)
+            time.sleep(0.015)
 
     except KeyboardInterrupt:
         logger.info("Interrupted by user.")
 
     finally:
         logger.info("Releasing camera and closing windows...")
-        cap.release()
-        cv2.destroyAllWindows()
+        webcam.release()
         logger.info("Live detection demo completed cleanly.")
 
 

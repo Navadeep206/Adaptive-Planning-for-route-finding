@@ -27,3 +27,14 @@ Thumbs.db
 # Model weights
 *.pt
 *.pth
+
+# Pytest and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets and environment files
+.env
+.env.*
+*.pem
+*.key

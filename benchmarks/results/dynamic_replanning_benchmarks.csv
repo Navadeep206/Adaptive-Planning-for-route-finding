@@ -1,0 +1,5 @@
+scenario_name,initial_path_length,obstacle_spawned_coord,replanning_occurred,replan_execution_time_ms,new_path_length,alternate_route_valid,vehicle_stopped_safely,collision_occurred,notes
+scenario_1_single_hazard_reroute,27,"(4, 13)",True,0.2802499999994268,29,True,True,False,Dynamic hazard inserted on path. A* successfully computed detour.
+scenario_2_dynamic_hazard_during_autonomous_nav,27,"(6, 13)",True,0.2425830000003515,0,True,True,False,"Vehicle navigated autonomously, detoured around dynamic hazard, and reached goal safely."
+scenario_3_corridor_closure_fail_safe,27,"(14, 12)",True,0.3427500000006134,0,False,True,False,Corridor closed. Planner safely declared NO_PATH; vehicle halted immediately with 0 collisions.
+scenario_4_vehicle_position_safety_guard,27,"(2, 12)",False,0.0,27,True,True,False,Candidate obstacle overlapping vehicle was suppressed by Safety Guard. Vehicle was never trapped.

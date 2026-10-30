@@ -95,7 +95,9 @@ class WebcamManager:
     def __init__(
         self,
         device_index: Optional[int] = None,
-        window_title: str = "Sensor Feed: MacBook Built-in Camera"
+        window_title: str = "Sensor Feed: MacBook Built-in Camera",
+        window_pos: Optional[Tuple[int, int]] = (1020, 40),
+        window_size: Tuple[int, int] = (400, 300)
     ):
         """Initialize the webcam manager.
 
@@ -103,6 +105,8 @@ class WebcamManager:
             device_index: Explicit device index, or None to automatically select
                           the MacBook built-in camera.
             window_title: Window title for the OpenCV preview window.
+            window_pos: Optional screen (x, y) coordinates for side-by-side positioning.
+            window_size: Optional (width, height) in pixels for the preview window.
         """
         if device_index is not None:
             self.device_index: int = device_index
@@ -112,6 +116,8 @@ class WebcamManager:
             self.device_name = "MacBook Built-in Camera"
 
         self.window_title: str = window_title
+        self.window_pos: Optional[Tuple[int, int]] = window_pos
+        self.window_size: Tuple[int, int] = window_size
         self.cap: Optional[cv2.VideoCapture] = None
         self.state: CameraState = CameraState.OFF
         self.is_preview_active: bool = False
@@ -133,6 +139,14 @@ class WebcamManager:
 
         # GUI Window state
         self._window_created: bool = False
+        self._move_attempts: int = 0
+        self.last_key: Optional[int] = None
+
+    def pop_key(self) -> Optional[int]:
+        """Retrieve and reset the last key pressed within the OpenCV window."""
+        k = self.last_key
+        self.last_key = None
+        return k
 
     def is_active(self) -> bool:
         """Check if the live camera preview is currently streaming and active."""
@@ -316,6 +330,7 @@ class WebcamManager:
                         with self._frame_lock:
                             self.state = CameraState.ERROR
                             self._stream_error = "Error: Camera disconnected / frame read failure"
+                            self.status_message = "Error: Camera disconnected / frame read failure"
                         break
 
                 # Sleep 15ms (~60 FPS) to pace capture and avoid consuming excessive CPU
@@ -349,8 +364,12 @@ class WebcamManager:
             return False
         return self.start_preview()
 
-    def update(self) -> Tuple[bool, Optional[np.ndarray]]:
+    def update(self, display_frame: Optional[np.ndarray] = None) -> Tuple[bool, Optional[np.ndarray]]:
         """Fetch latest frame and render OpenCV preview window if active.
+
+        Args:
+            display_frame: Optional annotated frame (e.g. with YOLO bounding boxes and telemetry)
+                           to render in the OpenCV preview window instead of the raw camera frame.
 
         Must be called on the main thread for Cocoa GUI compatibility.
 
@@ -374,11 +393,26 @@ class WebcamManager:
                 frame_to_display = self._latest_frame
                 self._new_frame_available = False
 
-        # Render frame in OpenCV window if a new frame is ready
-        if frame_to_display is not None:
+        # If the caller provided a pre-annotated frame, prioritize it for GUI preview
+        frame_to_render = display_frame if display_frame is not None else frame_to_display
+
+        # Render frame in OpenCV window if a frame is ready
+        if frame_to_render is not None:
             try:
-                cv2.imshow(self.window_title, frame_to_display)
-                self._window_created = True
+                if not self._window_created:
+                    cv2.namedWindow(self.window_title, cv2.WINDOW_NORMAL)
+                    cv2.resizeWindow(self.window_title, self.window_size[0], self.window_size[1])
+                    if self.window_pos is not None:
+                        cv2.moveWindow(self.window_title, self.window_pos[0], self.window_pos[1])
+                    self._window_created = True
+
+                cv2.imshow(self.window_title, frame_to_render)
+
+                if self._move_attempts < 5:
+                    cv2.resizeWindow(self.window_title, self.window_size[0], self.window_size[1])
+                    if self.window_pos is not None:
+                        cv2.moveWindow(self.window_title, self.window_pos[0], self.window_pos[1])
+                    self._move_attempts += 1
             except Exception as exc:
                 logger.error("Error during cv2.imshow: %s", exc)
                 self.stop_preview()
@@ -387,15 +421,22 @@ class WebcamManager:
                 return False, None
 
         # Process Cocoa window events (1ms delay)
-        # Allows closing preview via 'Q' key or ESC inside the OpenCV window
+        # Allows closing preview via 'Q' key or ESC inside the OpenCV window,
+        # or capturing hotkeys (M, P, Space, etc.) forwarded to the application.
         if self._window_created:
             key = cv2.waitKey(1) & 0xFF
-            if key in (ord('q'), ord('Q'), 27):
-                logger.info("Preview disabled by user key event in OpenCV window.")
-                self.stop_preview()
-                return False, None
+            if key != 255:
+                self.last_key = key
+                if key in (ord('q'), ord('Q'), 27):
+                    logger.info("Preview disabled by user key event in OpenCV window.")
+                    self.stop_preview()
+                    return False, None
+            else:
+                self.last_key = None
 
-        return (frame_to_display is not None), frame_to_display
+        has_frame = (frame_to_display is not None or display_frame is not None)
+        returned_frame = frame_to_display if frame_to_display is not None else display_frame
+        return has_frame, returned_frame
 
     def release(self) -> None:
         """Safely release camera hardware handles and destroy OpenCV windows.

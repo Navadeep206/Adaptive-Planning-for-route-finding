@@ -105,12 +105,17 @@ class TestMacBookWebcam(unittest.TestCase):
         time.sleep(0.05)
         self.assertTrue(cam.is_active())
 
+        # Consume initial valid frame
+        cam.update()
+
         # Fast-forward worker thread reading failures
         # In webcam.py, consecutive_errors > 45 triggers disconnection
-        time.sleep(0.8)
+        for _ in range(25):
+            time.sleep(0.05)
+            ready, frame = cam.update()
+            if not ready and cam.get_state() == CameraState.ERROR:
+                break
 
-        # Update should process stream error
-        ready, frame = cam.update()
         self.assertFalse(ready)
         self.assertEqual(cam.get_state(), CameraState.ERROR)
         self.assertIn("Error", cam.get_status())

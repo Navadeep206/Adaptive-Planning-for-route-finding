@@ -152,6 +152,13 @@ class YOLOObjectDetector:
         """Check whether the model is loaded and ready for inference."""
         return self._is_loaded and self._model is not None
 
+    @property
+    def status_text(self) -> str:
+        """Return human-readable status of the model."""
+        if self.is_loaded():
+            return f"Ready ({self.model_name})"
+        return "Not Loaded"
+
     def detect(self, frame: Optional[np.ndarray]) -> Tuple[List[Detection], float]:
         """Perform object detection on an image frame.
 
@@ -213,6 +220,19 @@ class YOLOObjectDetector:
                     )
                 )
 
+            if len(detections) == 0:
+                logger.debug(
+                    "YOLO inference found 0 detections meeting conf_threshold=%.2f in %.1f ms.",
+                    self.conf_threshold,
+                    self.last_inference_time_ms
+                )
+            else:
+                logger.debug(
+                    "YOLO inference found %d detections in %.1f ms.",
+                    len(detections),
+                    self.last_inference_time_ms
+                )
+
             return detections, self.last_inference_time_ms
 
         except Exception as exc:
@@ -224,7 +244,8 @@ class YOLOObjectDetector:
         self,
         frame: np.ndarray,
         detections: List[Detection],
-        inference_time_ms: Optional[float] = None
+        inference_time_ms: Optional[float] = None,
+        mapping_enabled: Optional[bool] = None
     ) -> np.ndarray:
         """Render detection bounding boxes, labels, and telemetry onto a frame copy.
 
@@ -232,6 +253,7 @@ class YOLOObjectDetector:
             frame: Input image array.
             detections: List of Detection instances to render.
             inference_time_ms: Optional inference latency in ms to display.
+            mapping_enabled: Optional flag indicating whether perception grid mapping is ON or OFF.
 
         Returns:
             np.ndarray: Annotated frame copy.
@@ -242,77 +264,116 @@ class YOLOObjectDetector:
         canvas = frame.copy()
         h, w = canvas.shape[:2]
 
+        # Resolution-adaptive scaling for text and bounding boxes
+        min_dim = min(w, h)
+        font_scale = max(0.45, min(0.85, (min_dim / 720.0) * 0.55))
+        thickness = max(1, int(round(font_scale * 2)))
+        box_thickness = max(2, int(round(font_scale * 3)))
+        font = cv2.FONT_HERSHEY_SIMPLEX
+
         # Draw detections
         for det in detections:
             x1, y1, x2, y2 = det.bbox
 
-            # Clamp coordinates to frame boundaries
-            x1 = max(0, min(x1, w - 1))
-            y1 = max(0, min(y1, h - 1))
-            x2 = max(0, min(x2, w - 1))
-            y2 = max(0, min(y2, h - 1))
+            # Clamp coordinates to frame boundaries and cast to int
+            x1 = int(round(max(0, min(x1, w - 1))))
+            y1 = int(round(max(0, min(y1, h - 1))))
+            x2 = int(round(max(0, min(x2, w - 1))))
+            y2 = int(round(max(0, min(y2, h - 1))))
 
-            # Bounding box (Vibrant Cyan / Green)
-            box_color = (0, 240, 160)
-            cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 2)
+            # Double-contour bounding box for maximum contrast against any lighting
+            # Dark outer contour (1px wider) + Vibrant inner Cyan/Green box
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 0), box_thickness + 2)
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 240, 160), box_thickness)
 
-            # Label text
-            label = f"{det.class_name} {det.confidence:.2f}"
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.5
-            thickness = 1
+            # Label text with percentage
+            conf_pct = int(round(det.confidence * 100))
+            label = f"{det.class_name} {conf_pct}%"
 
             (text_w, text_h), baseline = cv2.getTextSize(label, font, font_scale, thickness)
-            badge_y1 = max(0, y1 - text_h - 6)
-            badge_y2 = y1
 
-            # Background badge for label
-            cv2.rectangle(canvas, (x1, badge_y1), (x1 + text_w + 8, badge_y2), box_color, -1)
+            # Ceiling-safe badge positioning: avoid clipping off-screen when box touches top
+            if y1 - text_h - 8 >= 0:
+                badge_y1 = y1 - text_h - 8
+                badge_y2 = y1
+                text_y = y1 - 4
+            else:
+                badge_y1 = y1
+                badge_y2 = y1 + text_h + 8
+                text_y = y1 + text_h + 4
+
+            # Dark badge with vibrant border and clean white text
+            cv2.rectangle(canvas, (x1, badge_y1), (x1 + text_w + 8, badge_y2), (15, 15, 15), -1)
+            cv2.rectangle(canvas, (x1, badge_y1), (x1 + text_w + 8, badge_y2), (0, 240, 160), 1)
             cv2.putText(
                 canvas,
                 label,
-                (x1 + 4, y1 - 4),
+                (x1 + 4, text_y),
                 font,
                 font_scale,
-                (10, 10, 10),
+                (255, 255, 255),
                 thickness,
                 cv2.LINE_AA
             )
 
         # Draw HUD summary overlay at top-left
-        cv2.rectangle(canvas, (10, 10), (320, 75), (20, 20, 20), -1)
-        cv2.rectangle(canvas, (10, 10), (320, 75), (0, 200, 255), 1)
+        hud_w = max(330, int(w * 0.32))
+        hud_h = 76
+        cv2.rectangle(canvas, (10, 10), (10 + hud_w, 10 + hud_h), (20, 20, 20), -1)
+        cv2.rectangle(canvas, (10, 10), (10 + hud_w, 10 + hud_h), (0, 200, 255), 1)
 
         cv2.putText(
             canvas,
             f"YOLO Detector: {self.model_name}",
             (18, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
+            font,
             0.5,
             (0, 200, 255),
             1,
             cv2.LINE_AA
         )
+
         inf_str = f"{inference_time_ms:.1f} ms" if inference_time_ms is not None else "N/A"
+        if len(detections) > 0:
+            det_text = f"Detections: {len(detections)}  |  Latency: {inf_str}"
+            det_color = (0, 240, 160)
+        else:
+            det_text = f"Detections: 0 (No objects)  |  Latency: {inf_str}"
+            det_color = (180, 180, 180)
+
         cv2.putText(
             canvas,
-            f"Objects: {len(detections)}  |  Inference: {inf_str}",
+            det_text,
             (18, 52),
-            cv2.FONT_HERSHEY_SIMPLEX,
+            font,
             0.45,
-            (240, 240, 240),
+            det_color,
             1,
             cv2.LINE_AA
         )
         cv2.putText(
             canvas,
             f"Confidence Thresh: {self.conf_threshold:.2f}",
-            (18, 68),
-            cv2.FONT_HERSHEY_SIMPLEX,
+            (18, 70),
+            font,
             0.4,
             (160, 160, 160),
             1,
             cv2.LINE_AA
         )
+
+        if mapping_enabled is not None:
+            map_status = "ON" if mapping_enabled else "OFF"
+            map_color = (0, 255, 120) if mapping_enabled else (140, 140, 140)
+            cv2.putText(
+                canvas,
+                f"Perception Mapping: {map_status} (Toggle: 'M')",
+                (18, 88),
+                font,
+                0.4,
+                map_color,
+                1,
+                cv2.LINE_AA
+            )
 
         return canvas

@@ -144,6 +144,54 @@ class TestObjectDetection(unittest.TestCase):
         self.assertEqual(np.count_nonzero(self.sample_frame), 0)
         self.assertGreater(np.count_nonzero(annotated), 0)
 
+    def test_draw_detections_with_zero_detections(self):
+        """Verify drawing HUD overlay when 0 objects are detected."""
+        detector = YOLOObjectDetector(auto_load=False)
+        annotated = detector.draw_detections(self.sample_frame, [], inference_time_ms=12.0)
+        self.assertIsNotNone(annotated)
+        # Should render HUD banner even with 0 detections
+        self.assertGreater(np.count_nonzero(annotated), 0)
+
+    def test_draw_detections_ceiling_safe_bounding_box(self):
+        """Verify bounding box touching top frame ceiling (y1=0) does not clip label off-screen."""
+        detector = YOLOObjectDetector(auto_load=False)
+        detections = [
+            Detection(class_id=0, class_name="ceiling_box", confidence=0.95, bbox=(50, 0, 150, 80))
+        ]
+        annotated = detector.draw_detections(self.sample_frame, detections, inference_time_ms=10.0)
+        self.assertIsNotNone(annotated)
+        self.assertEqual(annotated.shape, self.sample_frame.shape)
+
+    def test_inference_exception_is_handled_gracefully(self):
+        """Test that an unexpected exception during model execution does not crash."""
+        detector = YOLOObjectDetector(auto_load=False)
+        mock_model = MagicMock()
+        mock_model.side_effect = RuntimeError("Inference kernel fault")
+        detector._model = mock_model
+        detector._is_loaded = True
+
+        dets, inf_ms = detector.detect(self.sample_frame)
+        self.assertEqual(dets, [])
+        self.assertGreaterEqual(inf_ms, 0.0)
+
+    @patch("perception.webcam.cv2.imshow")
+    def test_webcam_update_prioritizes_annotated_display_frame(self, mock_imshow):
+        """Verify WebcamManager.update renders the provided annotated frame."""
+        from perception.webcam import WebcamManager
+        webcam = WebcamManager()
+        webcam.is_preview_active = True
+        webcam.state = webcam.get_state().ACTIVE
+
+        # Pass annotated frame to update
+        annotated = np.ones((480, 640, 3), dtype=np.uint8) * 200
+        has_frame, returned = webcam.update(display_frame=annotated)
+
+        self.assertTrue(has_frame)
+        mock_imshow.assert_called_once()
+        call_args = mock_imshow.call_args[0]
+        self.assertEqual(call_args[0], webcam.window_title)
+        self.assertTrue(np.array_equal(call_args[1], annotated))
+
     def test_object_detection_is_decoupled_from_simulation_grid(self):
         """Verify safety invariant: running detection does not alter A* grid or inject obstacles."""
         env = RoadEnvironment()
@@ -158,6 +206,53 @@ class TestObjectDetection(unittest.TestCase):
         self.assertEqual(env.obstacle_set, initial_obstacles)
         self.assertTrue(np.array_equal(env.grid, initial_grid))
 
+    def test_end_to_end_perception_grid_and_planner_response(self):
+        """Verify end-to-end flow: Detections -> GridMapper -> Environment -> A* Planner replan."""
+        from perception.grid_mapper import GridMapper, GridMapperConfig
+        from simulation.environment import CellType, NavigationMode
+
+        env = RoadEnvironment()
+        res = env.plan_path()
+        self.assertTrue(res.success)
+        self.assertGreater(len(env.planned_path), 3)
+
+        # Pick a waypoint directly along the vehicle's planned path
+        target_cell = env.planned_path[2]
+        r_target, c_target = target_cell
+
+        # Enable perception mapping
+        env.toggle_perception_mapping()
+        self.assertTrue(env.perception_enabled)
+
+        # Create structured detection that maps to target_cell
+        mapper = GridMapper(GridMapperConfig(grid_rows=env.rows, grid_cols=env.cols))
+        mapper.map_detection_to_cell = lambda *args, **kwargs: target_cell
+
+        det = Detection(class_id=0, class_name="hazard_box", confidence=0.90, bbox=(100, 100, 200, 200))
+        mapping_result = mapper.map_detections(
+            detections=[det],
+            frame_shape=(480, 640),
+            current_time=100.0,
+            vehicle_pos=env.vehicle_pos,
+            goal_pos=env.destination_pos
+        )
+
+        # Set perception obstacles in environment
+        env.set_perception_obstacles(mapping_result.final_cells)
+
+        # Verify target_cell is now marked as an obstacle
+        self.assertEqual(env.grid[target_cell], CellType.OBSTACLE)
+        self.assertIn(target_cell, env.perception_obstacle_set)
+
+        # Autonomous mode should trigger detour replanning
+        env.nav_mode = NavigationMode.AUTONOMOUS
+        env.is_route_blocked = MagicMock(return_value=True)
+        env.set_perception_obstacles(mapping_result.final_cells)
+
+        # Vehicle must not move into blocked cell
+        self.assertNotEqual(env.vehicle_pos, target_cell)
+
 
 if __name__ == "__main__":
     unittest.main()
+
