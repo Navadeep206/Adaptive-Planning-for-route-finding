@@ -6,6 +6,7 @@ and reset via 'R'), reliable MacBook webcam stream via 'C', and manages clean sy
 """
 
 import argparse
+import os
 import sys
 import time
 import logging
@@ -14,6 +15,8 @@ import pygame
 from simulation.environment import RoadEnvironment
 from perception.webcam import WebcamManager
 from perception.object_detector import YOLOObjectDetector
+from perception.object_tracker import ObjectTracker, TrackerConfig
+from perception.camera_calibrator import CameraCalibrator
 from perception.grid_mapper import GridMapper, GridMapperConfig
 
 # Configure root logger
@@ -39,8 +42,21 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--conf",
         type=float,
-        default=0.35,
-        help="YOLO detection confidence threshold (default: 0.35)"
+        default=0.25,
+        help="YOLO detection confidence threshold (default: 0.25)"
+    )
+    parser.add_argument(
+        "--iou",
+        type=float,
+        default=0.45,
+        help="YOLO Non-Maximum Suppression (NMS) IoU threshold (default: 0.45)"
+    )
+    parser.add_argument(
+        "--preprocess",
+        type=str,
+        default="none",
+        choices=["none", "clahe", "gamma"],
+        help="Preprocessing contrast enhancement: 'none', 'clahe', or 'gamma' (default: 'none')"
     )
     parser.add_argument(
         "--model",
@@ -152,23 +168,41 @@ def main() -> None:
     detector = YOLOObjectDetector(
         model_name=args.model,
         conf_threshold=args.conf,
+        iou_threshold=args.iou,
+        preprocess_mode=args.preprocess,
         auto_load=True
+    )
+
+    calibrator = CameraCalibrator()
+    tracker = ObjectTracker(
+        detector=detector,
+        config=TrackerConfig(
+            min_confidence=args.conf,
+            track_activation_threshold=2,
+            lost_timeout_sec=1.0,
+            max_lost_frames=15,
+            history_len=30,
+            enable_box_smoothing=True
+        )
     )
 
     mapper_config = GridMapperConfig(
         min_confidence=args.conf,
         grid_rows=env.rows,
         grid_cols=env.cols,
-        inflation_radius=args.inflation
+        inflation_radius=args.inflation,
+        calibrator=calibrator,
+        debounce_hits=1
     )
     mapper = GridMapper(config=mapper_config)
 
-    # Throttling timer for vision inference (e.g. 150ms ~ 7 FPS)
+    # Throttling timer for vision inference (e.g. 100ms ~ 10 FPS)
     perception_timer_ms: int = 0
-    perception_interval_ms: int = 150
+    perception_interval_ms: int = 100
 
-    # Detection state cache for smooth rendering
-    last_detections = []
+    # Tracking & detection state cache for smooth rendering
+    last_tracks = []
+    last_telemetry = {}
     last_inf_ms = None
 
     # Simultaneous Dual-Window Operation:
@@ -216,6 +250,8 @@ def main() -> None:
                     events_to_process.append(pygame.K_p)
                 elif cv_key == ord(' '):
                     events_to_process.append(pygame.K_SPACE)
+                elif cv_key in (ord('t'), ord('T')):
+                    events_to_process.append(pygame.K_t)
                 elif cv_key in (ord('r'), ord('R')):
                     events_to_process.append(pygame.K_r)
                 elif cv_key in (ord('o'), ord('O')):
@@ -257,6 +293,24 @@ def main() -> None:
                     else:
                         mapper.clear()
 
+                # Toggle YOLO Model weights (Pretrained yolo11n.pt <-> Custom models/custom_obstacle_detector.pt): T Key
+                elif key == pygame.K_t:
+                    custom_path = "models/custom_obstacle_detector.pt"
+                    target_model = "yolo11n.pt" if detector.is_custom_model else custom_path
+                    if target_model == custom_path and not os.path.exists(custom_path):
+                        env.last_action_msg = f"Custom model '{custom_path}' not found. Train first with tools/train_custom_model.py"
+                        logger.warning("Custom weights '%s' not found.", custom_path)
+                    else:
+                        switched = detector.switch_model(target_model)
+                        if switched:
+                            tracker.reset()
+                            mapper.clear()
+                            model_lbl = "Custom 3-Class" if detector.is_custom_model else "COCO 80-Class"
+                            env.last_action_msg = f"YOLO model switched: {os.path.basename(detector.model_name)} ({model_lbl})"
+                            logger.info("YOLO model switched: %s", detector.status_text)
+                        else:
+                            env.last_action_msg = f"Failed to switch YOLO model to {target_model}"
+
                 # Dynamic obstacle insertion ahead of the vehicle
                 elif key == pygame.K_o:
                     inserted = env.insert_dynamic_obstacle(ahead_steps=3)
@@ -289,8 +343,10 @@ def main() -> None:
                 # Reset vehicle position, hazards, and clear route
                 elif key == pygame.K_r:
                     env.reset_vehicle()
+                    tracker.reset()
                     mapper.clear()
-                    last_detections = []
+                    last_tracks = []
+                    last_telemetry = {}
                     last_inf_ms = None
                     logger.info("Vehicle, dynamic hazards, perception cells, and route reset to initial state.")
 
@@ -311,11 +367,12 @@ def main() -> None:
                     perception_timer_ms += dt_ms
                     if perception_timer_ms >= perception_interval_ms:
                         perception_timer_ms = 0
-                        last_detections, last_inf_ms = detector.detect(raw_frame)
+                        last_tracks, last_telemetry = tracker.update(raw_frame)
+                        last_inf_ms = last_telemetry.get("total_ms", 0.0)
 
                         if env.perception_enabled:
-                            mapping_res = mapper.map_detections(
-                                detections=last_detections,
+                            mapping_res = mapper.map_tracks(
+                                tracks=last_tracks,
                                 frame_shape=raw_frame.shape[:2],
                                 current_time=time.time(),
                                 vehicle_pos=env.vehicle_pos,
@@ -323,19 +380,22 @@ def main() -> None:
                             )
                             env.set_perception_obstacles(mapping_res.final_cells)
                             if len(mapping_res.final_cells) > 0:
-                                env.last_action_msg = f"Perception: {len(mapping_res.final_cells)} cell(s) mapped to grid: {sorted(list(mapping_res.final_cells))[:2]}"
+                                mode_tag = "Homography" if mapping_res.mapping_mode.startswith("Planar") else "ROI"
+                                env.last_action_msg = f"Perception [{mode_tag}]: {len(mapping_res.final_cells)} cell(s) mapped: {sorted(list(mapping_res.final_cells))[:2]}"
                                 env.last_action_status = "success"
                             elif mapping_res.vehicle_conflicts:
                                 env.last_action_msg = f"Perception: Candidate {list(mapping_res.vehicle_conflicts)[0]} overlaps vehicle (Protected by Safety Guard)."
                                 env.last_action_status = "normal"
 
-                    # Draw visible bounding boxes, class labels, confidence %, and HUD on preview frame
-                    display_frame = detector.draw_detections(
-                        raw_frame,
-                        last_detections,
-                        last_inf_ms,
-                        mapping_enabled=env.perception_enabled
+                    # Draw tracked obstacles, trajectory breadcrumbs, and calibration overlay
+                    display_frame = tracker.draw_tracks(
+                        frame=raw_frame,
+                        tracks=last_tracks,
+                        show_trails=True,
+                        show_velocity=True,
+                        telemetry=last_telemetry
                     )
+                    display_frame = calibrator.draw_calibration_overlay(display_frame, show_fiducials=True)
 
             elif env.perception_enabled:
                 # Camera inactive: prune any stale detections whose timeout elapsed
@@ -352,7 +412,7 @@ def main() -> None:
                 fonts=fonts,
                 webcam_status=webcam.get_status(),
                 model_status=detector.status_text,
-                detection_count=len(last_detections),
+                detection_count=tracker.active_track_count,
                 inference_latency_ms=last_inf_ms
             )
             pygame.display.flip()

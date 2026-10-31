@@ -252,7 +252,193 @@ class TestObjectDetection(unittest.TestCase):
         # Vehicle must not move into blocked cell
         self.assertNotEqual(env.vehicle_pos, target_cell)
 
+    def test_draw_detections_diagnostic_mode_overlay(self):
+        """Verify that diagnostic mode renders camera telemetry HUD."""
+        detector = YOLOObjectDetector(auto_load=False)
+        annotated = detector.draw_detections(
+            self.sample_frame,
+            detections=[],
+            inference_time_ms=25.0,
+            fps=30.0,
+            diagnostic_mode=True
+        )
+        self.assertIsNotNone(annotated)
+        self.assertEqual(annotated.shape, self.sample_frame.shape)
+        self.assertGreater(np.count_nonzero(annotated), 0)
+
+    def test_draw_detections_zero_objects_banner(self):
+        """Verify that zero detections render an explicit diagnostic banner."""
+        detector = YOLOObjectDetector(auto_load=False)
+        # Test with dark frame (luminance < 25)
+        dark_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        annotated_dark = detector.draw_detections(dark_frame, detections=[])
+        self.assertGreater(np.count_nonzero(annotated_dark), 0)
+
+        # Test with bright frame
+        bright_frame = np.ones((480, 640, 3), dtype=np.uint8) * 128
+        annotated_bright = detector.draw_detections(bright_frame, detections=[])
+        self.assertGreater(np.count_nonzero(annotated_bright), 0)
+
+    def test_detector_initialization_with_phase2_parameters(self):
+        """Verify detector initializes with optimal Phase 2 parameters."""
+        detector = YOLOObjectDetector(
+            conf_threshold=0.25,
+            iou_threshold=0.45,
+            imgsz=640,
+            max_det=50,
+            preprocess_mode="clahe",
+            gamma_value=1.8,
+            clahe_clip_limit=2.5,
+            auto_load=False
+        )
+        self.assertEqual(detector.conf_threshold, 0.25)
+        self.assertEqual(detector.iou_threshold, 0.45)
+        self.assertEqual(detector.imgsz, 640)
+        self.assertEqual(detector.max_det, 50)
+        self.assertEqual(detector.preprocess_mode, "clahe")
+        self.assertEqual(detector.gamma_value, 1.8)
+        self.assertEqual(detector.clahe_clip_limit, 2.5)
+
+    def test_set_thresholds_dynamic_tuning(self):
+        """Verify dynamic hyperparameter tuning without reloading weights."""
+        detector = YOLOObjectDetector(auto_load=False)
+        detector.set_thresholds(conf=0.30, iou=0.55, imgsz=800, max_det=25)
+        self.assertEqual(detector.conf_threshold, 0.30)
+        self.assertEqual(detector.iou_threshold, 0.55)
+        self.assertEqual(detector.imgsz, 800)
+        self.assertEqual(detector.max_det, 25)
+
+    def test_apply_preprocessing_clahe_and_gamma(self):
+        """Verify image enhancement routines for CLAHE and Gamma Correction."""
+        detector = YOLOObjectDetector(auto_load=False)
+        sample = np.ones((100, 100, 3), dtype=np.uint8) * 50
+
+        # None mode
+        detector.set_preprocessing("none")
+        out_none, t0 = detector.apply_preprocessing(sample)
+        self.assertTrue(np.array_equal(sample, out_none))
+        self.assertEqual(t0, 0.0)
+
+        # Gamma mode
+        detector.set_preprocessing("gamma", gamma=2.0)
+        out_gamma, t_gamma = detector.apply_preprocessing(sample)
+        self.assertEqual(out_gamma.shape, sample.shape)
+        self.assertGreater(np.mean(out_gamma), np.mean(sample))
+
+        # CLAHE mode
+        detector.set_preprocessing("clahe", clip_limit=3.0)
+        out_clahe, t_clahe = detector.apply_preprocessing(sample)
+        self.assertEqual(out_clahe.shape, sample.shape)
+        self.assertEqual(out_clahe.dtype, np.uint8)
+
+    def test_detect_passes_iou_and_max_det_to_model(self):
+        """Verify that inference call forwards iou, max_det, and conf correctly."""
+        detector = YOLOObjectDetector(
+            conf_threshold=0.22,
+            iou_threshold=0.52,
+            imgsz=640,
+            max_det=35,
+            auto_load=False
+        )
+        detector._is_loaded = True
+        mock_model = MagicMock()
+        mock_res = MagicMock()
+        mock_res.boxes = []
+        mock_model.return_value = [mock_res]
+        detector._model = mock_model
+
+        detector.detect(self.sample_frame)
+        mock_model.assert_called_once()
+        call_kwargs = mock_model.call_args[1]
+        self.assertEqual(call_kwargs["conf"], 0.22)
+        self.assertEqual(call_kwargs["iou"], 0.52)
+        self.assertEqual(call_kwargs["max_det"], 35)
+        self.assertEqual(call_kwargs["imgsz"], 640)
+
+
+    def test_custom_model_property_and_status_text(self):
+        """Verify is_custom_model identifies 3-class custom vs 80-class COCO correctly."""
+        detector = YOLOObjectDetector(auto_load=False)
+        detector._is_loaded = True
+        detector._model = MagicMock()
+
+        # Custom 3-class setup
+        detector.class_names = {0: "road_hazard", 1: "pedestrian", 2: "vehicle"}
+        detector.model_name = "models/custom_obstacle_detector.pt"
+        self.assertTrue(detector.is_custom_model)
+        self.assertIn("Custom 3-Class", detector.status_text)
+
+        # Standard COCO setup
+        detector.class_names = {0: "person", 1: "bicycle", 2: "car"}
+        detector.model_name = "yolo11n.pt"
+        self.assertFalse(detector.is_custom_model)
+        self.assertIn("COCO 80-Class", detector.status_text)
+
+    def test_switch_model_success(self):
+        """Test switching active model dynamically updates model_name and class_names."""
+        detector = YOLOObjectDetector(model_name="yolo11n.pt", auto_load=False)
+        detector._is_loaded = True
+        detector.class_names = {0: "person"}
+
+        mock_new_model = MagicMock()
+        mock_new_model.names = {0: "road_hazard", 1: "pedestrian", 2: "vehicle"}
+
+        with patch("ultralytics.YOLO", return_value=mock_new_model):
+            success = detector.switch_model("models/custom_obstacle_detector.pt")
+            self.assertTrue(success)
+            self.assertEqual(detector.model_name, "models/custom_obstacle_detector.pt")
+            self.assertTrue(detector.is_custom_model)
+            self.assertEqual(len(detector.class_names), 3)
+
+    def test_switch_model_failure_reverts_state(self):
+        """Test that switch_model reverts cleanly to prior state when an error occurs."""
+        detector = YOLOObjectDetector(model_name="yolo11n.pt", auto_load=False)
+        detector._is_loaded = True
+        detector.class_names = {0: "person"}
+        original_model = MagicMock()
+        detector._model = original_model
+
+        with patch("ultralytics.YOLO", side_effect=RuntimeError("Corrupt weights file")):
+            success = detector.switch_model("corrupted_model.pt")
+            self.assertFalse(success)
+            self.assertEqual(detector.model_name, "yolo11n.pt")
+            self.assertEqual(detector._model, original_model)
+            self.assertEqual(detector.class_names, {0: "person"})
+
+    def test_load_model_fallback_to_pretrained(self):
+        """Test that a failed custom model load automatically falls back to yolo11n.pt."""
+        detector = YOLOObjectDetector(model_name="missing_custom.pt", auto_load=False)
+
+        mock_pretrained = MagicMock()
+        mock_pretrained.names = {0: "person", 1: "car"}
+
+        def side_effect(model_arg):
+            if model_arg == "missing_custom.pt":
+                raise FileNotFoundError("Missing custom weights")
+            return mock_pretrained
+
+        with patch("ultralytics.YOLO", side_effect=side_effect):
+            loaded = detector.load_model(fallback_to_pretrained=True)
+            self.assertTrue(loaded)
+            self.assertEqual(detector.model_name, "yolo11n.pt")
+            self.assertEqual(detector.class_names, {0: "person", 1: "car"})
+
+    def test_real_custom_weights_file_validation(self):
+        """Test that fine-tuned weights exist on disk and instantiate properly if present."""
+        custom_weights_path = "models/custom_obstacle_detector.pt"
+        if os.path.exists(custom_weights_path):
+            self.assertGreater(os.path.getsize(custom_weights_path), 1024 * 1024)
+            detector = YOLOObjectDetector(model_name=custom_weights_path, auto_load=True)
+            self.assertTrue(detector.is_loaded())
+            self.assertTrue(detector.is_custom_model)
+            self.assertEqual(len(detector.class_names), 3)
+            self.assertEqual(detector.class_names[0], "road_hazard")
+            self.assertEqual(detector.class_names[1], "pedestrian")
+            self.assertEqual(detector.class_names[2], "vehicle")
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
 

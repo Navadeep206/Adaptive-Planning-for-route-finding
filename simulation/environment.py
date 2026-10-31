@@ -977,11 +977,12 @@ class RoadEnvironment:
         # ======================================================================
         # Card 4: Keyboard Controls Guide
         # ======================================================================
-        card4_h = 130
+        card4_h = 144
         self._draw_panel_box(screen, card_x, curr_y, card_w, card4_h, "KEYBOARD SHORTCUTS")
         controls = [
             ("SPACE", "Start / Pause autonomous"),
             ("M Key", "Toggle perception mapping"),
+            ("T Key", "Toggle Custom / COCO model"),
             ("O Key", "Insert dynamic hazard"),
             ("P Key", "Compute / refresh route"),
             ("R Key", "Reset vehicle & hazards"),

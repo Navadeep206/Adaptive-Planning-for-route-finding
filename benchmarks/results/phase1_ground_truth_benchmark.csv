@@ -1,0 +1,26 @@
+config_name,image_source,device,conf_threshold,imgsz,gt_total_objects,detected_total,true_positives,false_positives,false_negatives,missed_detections,detected_classes,confidence_scores,inference_latency_ms
+"Current Default (conf=0.35, imgsz=640, dev=cpu)",bus.jpg,cpu,0.35,640,5,5,5,0,0,0,bus|person|person|person|person,0.94|0.888|0.878|0.856|0.622,72.03
+"Current Default (conf=0.35, imgsz=640, dev=cpu)",zidane.jpg,cpu,0.35,640,4,3,3,0,1,1,person|person|tie,0.84|0.779|0.452,33.76
+"Current Default (conf=0.35, imgsz=640, dev=cpu)",grace_hopper.jpg,cpu,0.35,640,2,2,2,0,0,0,person|tie,0.907|0.466,43.39
+"Current Default (conf=0.35, imgsz=640, dev=cpu)",webcam_dark_baseline.jpg,cpu,0.35,640,0,0,0,0,0,0,,,32.31
+"Current Default (conf=0.35, imgsz=640, dev=cpu)",webcam_live.jpg,cpu,0.35,640,0,0,0,0,0,0,,,31.03
+"Balanced Recall (conf=0.25, imgsz=640, dev=cpu)",bus.jpg,cpu,0.25,640,5,5,5,0,0,0,bus|person|person|person|person,0.94|0.888|0.878|0.856|0.622,39.06
+"Balanced Recall (conf=0.25, imgsz=640, dev=cpu)",zidane.jpg,cpu,0.25,640,4,3,3,0,1,1,person|person|tie,0.84|0.779|0.452,31.68
+"Balanced Recall (conf=0.25, imgsz=640, dev=cpu)",grace_hopper.jpg,cpu,0.25,640,2,2,2,0,0,0,person|tie,0.907|0.466,43.2
+"Balanced Recall (conf=0.25, imgsz=640, dev=cpu)",webcam_dark_baseline.jpg,cpu,0.25,640,0,0,0,0,0,0,,,31.43
+"Balanced Recall (conf=0.25, imgsz=640, dev=cpu)",webcam_live.jpg,cpu,0.25,640,0,0,0,0,0,0,,,31.16
+"Balanced MPS (conf=0.25, imgsz=640, dev=mps)",bus.jpg,mps,0.25,640,5,5,5,0,0,0,bus|person|person|person|person,0.94|0.888|0.878|0.856|0.622,188.21
+"Balanced MPS (conf=0.25, imgsz=640, dev=mps)",zidane.jpg,mps,0.25,640,4,3,3,0,1,1,person|person|tie,0.84|0.779|0.452,60.01
+"Balanced MPS (conf=0.25, imgsz=640, dev=mps)",grace_hopper.jpg,mps,0.25,640,2,2,2,0,0,0,person|tie,0.907|0.466,740.98
+"Balanced MPS (conf=0.25, imgsz=640, dev=mps)",webcam_dark_baseline.jpg,mps,0.25,640,0,0,0,0,0,0,,,62.36
+"Balanced MPS (conf=0.25, imgsz=640, dev=mps)",webcam_live.jpg,mps,0.25,640,0,0,0,0,0,0,,,37.1
+"High Recall (conf=0.15, imgsz=640, dev=cpu)",bus.jpg,cpu,0.15,640,5,5,5,0,0,0,bus|person|person|person|person,0.94|0.888|0.878|0.856|0.622,78.4
+"High Recall (conf=0.15, imgsz=640, dev=cpu)",zidane.jpg,cpu,0.15,640,4,4,4,0,0,0,person|person|tie|tie,0.84|0.779|0.452|0.209,32.93
+"High Recall (conf=0.15, imgsz=640, dev=cpu)",grace_hopper.jpg,cpu,0.15,640,2,3,2,1,0,0,person|tie|tie,0.907|0.466|0.165,45.57
+"High Recall (conf=0.15, imgsz=640, dev=cpu)",webcam_dark_baseline.jpg,cpu,0.15,640,0,0,0,0,0,0,,,30.84
+"High Recall (conf=0.15, imgsz=640, dev=cpu)",webcam_live.jpg,cpu,0.15,640,0,0,0,0,0,0,,,32.68
+"Strict High Precision (conf=0.45, imgsz=640, dev=cpu)",bus.jpg,cpu,0.45,640,5,5,5,0,0,0,bus|person|person|person|person,0.94|0.888|0.878|0.856|0.622,39.96
+"Strict High Precision (conf=0.45, imgsz=640, dev=cpu)",zidane.jpg,cpu,0.45,640,4,3,3,0,1,1,person|person|tie,0.84|0.779|0.452,31.68
+"Strict High Precision (conf=0.45, imgsz=640, dev=cpu)",grace_hopper.jpg,cpu,0.45,640,2,2,2,0,0,0,person|tie,0.907|0.466,43.5
+"Strict High Precision (conf=0.45, imgsz=640, dev=cpu)",webcam_dark_baseline.jpg,cpu,0.45,640,0,0,0,0,0,0,,,31.61
+"Strict High Precision (conf=0.45, imgsz=640, dev=cpu)",webcam_live.jpg,cpu,0.45,640,0,0,0,0,0,0,,,30.52

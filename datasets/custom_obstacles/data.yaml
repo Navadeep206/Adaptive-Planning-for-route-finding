@@ -1,0 +1,8 @@
+path: /Users/navadeepguduru/Adaptive Path Planing/datasets/custom_obstacles
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: road_hazard
+  1: pedestrian
+  2: vehicle

@@ -8,6 +8,8 @@ ENV/
 __pycache__/
 *.py[cod]
 *$py.class
+*.cache
+
 
 # Distribution / packaging
 build/

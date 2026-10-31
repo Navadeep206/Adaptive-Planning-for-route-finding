@@ -1,0 +1,3 @@
+model_name,model_type,weights_path,weights_size_mb,test_images_count,ground_truth_total,true_positives,false_positives,false_negatives,overall_precision,overall_recall,overall_f1,median_latency_ms,effective_fps,road_hazard_recall,pedestrian_recall,vehicle_recall
+Pretrained yolo11n.pt (Baseline),COCO Pretrained,yolo11n.pt,5.35,5,4,1,3,3,0.25,0.25,0.25,43.98,22.7,0.0,1.0,1.0
+Custom Obstacle Detector (Fine-Tuned),Fine-Tuned Transfer Learning (15 Epochs),models/custom_obstacle_detector.pt,5.25,5,4,0,13,4,0.0,0.0,0.0,48.92,20.4,0.0,0.0,1.0

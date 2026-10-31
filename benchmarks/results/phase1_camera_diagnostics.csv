@@ -1,0 +1,7 @@
+source,resolution,aspect_ratio,mean_luminance,contrast_std,min_val,max_val,blue_mean,green_mean,red_mean,laplacian_variance,lighting_evaluation,sharpness_evaluation
+webcam_dark_baseline.jpg,1280x720,1.78:1,3.9,2.24,0,19,6.67,3.65,3.46,20.08,Severely Under-exposed (Near-Black Noise Floor),Severe Blur / Featureless
+webcam_live.jpg,1280x720,1.78:1,10.44,4.19,0,26,22.72,9.06,8.58,20.02,Severely Under-exposed (Near-Black Noise Floor),Severe Blur / Featureless
+bus.jpg,810x1080,0.75:1,116.43,68.0,0,255,118.34,115.61,117.34,3619.17,Normal (Good Illumination),Sharp / High Texture
+zidane.jpg,1280x720,1.78:1,60.8,47.7,0,255,51.34,58.16,69.45,100.74,Normal (Good Illumination),Moderate Blur / Soft
+grace_hopper.jpg,512x600,0.85:1,77.02,68.91,0,255,86.42,72.43,82.48,1034.38,Normal (Good Illumination),Sharp / High Texture
+live_camera_direct_capture,1280x720,1.78:1,7.6,3.64,0,41,12.85,6.75,7.37,25.66,Severely Under-exposed (Near-Black Noise Floor),Severe Blur / Featureless

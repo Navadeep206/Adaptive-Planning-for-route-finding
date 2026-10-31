@@ -1,0 +1,11 @@
+blur_kernel_size,laplacian_variance,conf_threshold,total_detections,detected_classes,confidence_scores,latency_ms
+1,3619.17,0.25,5,bus|person|person|person|person,0.94|0.888|0.878|0.856|0.622,43.28
+1,3619.17,0.35,5,bus|person|person|person|person,0.94|0.888|0.878|0.856|0.622,42.04
+5,1075.41,0.25,6,bus|person|person|person|person|skateboard,0.924|0.886|0.877|0.855|0.661|0.32,42.11
+5,1075.41,0.35,5,bus|person|person|person|person,0.924|0.886|0.877|0.855|0.661,43.26
+11,461.48,0.25,6,bus|person|person|person|person|skateboard,0.907|0.874|0.87|0.831|0.624|0.331,42.06
+11,461.48,0.35,5,bus|person|person|person|person,0.907|0.874|0.87|0.831|0.624,41.24
+21,271.6,0.25,4,person|person|person|bus,0.861|0.842|0.785|0.77,42.93
+21,271.6,0.35,4,person|person|person|bus,0.861|0.842|0.785|0.77,42.13
+31,192.61,0.25,4,person|person|bus|person,0.807|0.771|0.605|0.584,43.23
+31,192.61,0.35,4,person|person|bus|person,0.807|0.771|0.605|0.584,40.95

@@ -1,0 +1,3 @@
+pipeline_configuration,mean_inference_ms,median_inference_ms,p95_inference_ms,mean_tracking_overhead_ms,mean_total_latency_ms,effective_fps,avg_active_tracks,track_continuity_pct
+Raw Detector (No Tracking),55.23,31.54,51.88,0.0,55.23,18.1,0.0,0.0
+Integrated ByteTrack Tracker,34.32,29.68,37.87,34.36,34.36,29.1,0.0,100.0

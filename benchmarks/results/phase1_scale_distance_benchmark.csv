@@ -1,0 +1,11 @@
+simulated_distance_factor,scale_factor,input_resolution,conf_threshold,total_detections,detected_classes,confs,bus_detected,persons_detected,missed_persons,latency_ms
+1.00x,1.0,810x1080,0.25,5,bus|person|person|person|person,0.94|0.888|0.878|0.856|0.622,True,4,0,71.47
+1.00x,1.0,810x1080,0.35,5,bus|person|person|person|person,0.94|0.888|0.878|0.856|0.622,True,4,0,42.47
+1.33x,0.75,607x810,0.25,5,bus|person|person|person|person,0.945|0.884|0.883|0.861|0.61,True,4,0,40.55
+1.33x,0.75,607x810,0.35,5,bus|person|person|person|person,0.945|0.884|0.883|0.861|0.61,True,4,0,40.0
+2.00x,0.5,405x540,0.25,5,bus|person|person|person|person,0.944|0.886|0.88|0.856|0.579,True,4,0,39.06
+2.00x,0.5,405x540,0.35,5,bus|person|person|person|person,0.944|0.886|0.88|0.856|0.579,True,4,0,38.88
+2.86x,0.35,283x378,0.25,5,bus|person|person|person|person,0.936|0.887|0.847|0.84|0.527,True,4,0,38.92
+2.86x,0.35,283x378,0.35,5,bus|person|person|person|person,0.936|0.887|0.847|0.84|0.527,True,4,0,38.8
+4.00x,0.25,202x270,0.25,5,bus|person|person|person|person,0.905|0.881|0.843|0.811|0.316,True,4,0,39.29
+4.00x,0.25,202x270,0.35,4,bus|person|person|person,0.905|0.881|0.843|0.811,True,3,1,38.86
