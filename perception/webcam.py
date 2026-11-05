@@ -97,7 +97,7 @@ class WebcamManager:
         device_index: Optional[int] = None,
         window_title: str = "Sensor Feed: MacBook Built-in Camera",
         window_pos: Optional[Tuple[int, int]] = (1020, 40),
-        window_size: Tuple[int, int] = (400, 300)
+        window_size: Tuple[int, int] = (640, 520)
     ):
         """Initialize the webcam manager.
 

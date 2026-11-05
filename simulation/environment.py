@@ -5,7 +5,7 @@ static hazards, vehicle tracking, legend HUD, and manual keyboard testing.
 """
 
 from enum import IntEnum, Enum
-from typing import List, Tuple, Set, Optional
+from typing import List, Tuple, Set, Optional, Dict, Any
 import math
 import logging
 import numpy as np
@@ -120,6 +120,10 @@ class RoadEnvironment:
         # Perception-derived obstacle mapping state (Day 6)
         self.perception_enabled: bool = False
         self.perception_obstacle_set: Set[Tuple[int, int]] = set()
+        self.perception_primary_cells: Set[Tuple[int, int]] = set()
+        self.perception_track_map: Dict[Tuple[int, int], int] = {}
+        self.perception_status_map: Dict[Tuple[int, int], str] = {}
+        self.perception_telemetry: Dict[str, Any] = {}
         self.perception_conflict_count: int = 0
         self.perception_last_update_count: int = 0
 
@@ -565,7 +569,14 @@ class RoadEnvironment:
         logger.info("Perception mapping toggled: state=%s", state_str)
         return self.perception_enabled
 
-    def set_perception_obstacles(self, cells: Set[Tuple[int, int]]) -> None:
+    def set_perception_obstacles(
+        self,
+        cells: Set[Tuple[int, int]],
+        track_map: Optional[Dict[Tuple[int, int], int]] = None,
+        primary_cells: Optional[Set[Tuple[int, int]]] = None,
+        status_map: Optional[Dict[Tuple[int, int], str]] = None,
+        telemetry: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Update perception-derived obstacle cells on the terrain grid.
 
         Guarantees:
@@ -574,10 +585,28 @@ class RoadEnvironment:
         - Triggers adaptive replanning if a new perception hazard obstructs the active route.
 
         Args:
-            cells: Set of (row, col) coordinates to set as perception obstacles.
+            cells: Set of (row, col) coordinates to set as perception obstacles (footprint + inflated).
+            track_map: Optional mapping from cell (row, col) to perception Track ID.
+            primary_cells: Optional set of (row, col) coordinates representing the exact contact point.
+            status_map: Optional mapping from cell (row, col) to tracking status ("CONFIRMED", "UNCONFIRMED", "COASTING").
+            telemetry: Optional mapping of perception statistics (raw, confirmed, mapped, rejected).
         """
         if not self.perception_enabled:
             return
+
+        if track_map is not None:
+            self.perception_track_map = dict(track_map)
+
+        if primary_cells is not None:
+            self.perception_primary_cells = set(primary_cells)
+        else:
+            self.perception_primary_cells = set(cells)
+
+        if status_map is not None:
+            self.perception_status_map = dict(status_map)
+
+        if telemetry is not None:
+            self.perception_telemetry.update(telemetry)
 
         # 1. Prune removed cells (cells previously in perception_obstacle_set but not in new cells)
         cells_to_remove = self.perception_obstacle_set - cells
@@ -631,6 +660,8 @@ class RoadEnvironment:
                 self.obstacle_set.discard((r, c))
 
         self.perception_obstacle_set.clear()
+        self.perception_primary_cells.clear()
+        self.perception_track_map.clear()
         self.perception_last_update_count = 0
 
     def render(
@@ -750,12 +781,60 @@ class RoadEnvironment:
             obs_rect = pygame.Rect(px + pad, py + pad, self.cell_size - 2 * pad, self.cell_size - 2 * pad)
             center_pt = (px + self.cell_size // 2, py + self.cell_size // 2)
 
-            # Perception-derived cells: Electric purple with neon fuchsia border and bright sensor pulse
+            # Perception-derived cells: Distinct visual hierarchy separating confirmed, unconfirmed, and footprint
             if (r, c) in self.perception_obstacle_set:
-                pygame.draw.rect(screen, self.COLOR_PERCEPTION_OBSTACLE, obs_rect, border_radius=4)
-                pygame.draw.rect(screen, self.COLOR_PERCEPTION_BORDER, obs_rect, width=2, border_radius=4)
-                pygame.draw.circle(screen, self.COLOR_PERCEPTION_GLOW, center_pt, 4)
-                pygame.draw.circle(screen, (255, 255, 255), center_pt, 2)
+                is_primary = (r, c) in getattr(self, "perception_primary_cells", set())
+                status = self.perception_status_map.get((r, c), "CONFIRMED")
+                tid = self.perception_track_map.get((r, c))
+
+                if status == "UNCONFIRMED":
+                    if is_primary:
+                        pygame.draw.rect(screen, (217, 119, 6), obs_rect, border_radius=4)
+                        pygame.draw.rect(screen, (251, 191, 36), obs_rect, width=2, border_radius=4)
+                        pygame.draw.circle(screen, (254, 240, 138), center_pt, 4)
+                        pygame.draw.circle(screen, (255, 255, 255), center_pt, 2)
+                        label = f"T{tid}?" if tid is not None else "?"
+                    else:
+                        pygame.draw.rect(screen, (180, 83, 9), obs_rect, border_radius=4)
+                        pygame.draw.rect(screen, (245, 158, 11), obs_rect, width=1, border_radius=4)
+                        pygame.draw.circle(screen, (217, 119, 6), center_pt, 2)
+                        label = None
+                elif status == "COASTING":
+                    if is_primary:
+                        pygame.draw.rect(screen, (91, 33, 182), obs_rect, border_radius=4)
+                        pygame.draw.rect(screen, (167, 139, 250), obs_rect, width=2, border_radius=4)
+                        pygame.draw.circle(screen, (196, 181, 253), center_pt, 4)
+                        pygame.draw.circle(screen, (255, 255, 255), center_pt, 2)
+                        label = f"T{tid}~" if tid is not None else "~"
+                    else:
+                        pygame.draw.rect(screen, (76, 29, 149), obs_rect, border_radius=4)
+                        pygame.draw.rect(screen, (139, 92, 246), obs_rect, width=1, border_radius=4)
+                        pygame.draw.circle(screen, (124, 58, 237), center_pt, 2)
+                        label = None
+                else:  # CONFIRMED or default
+                    if is_primary:
+                        pygame.draw.rect(screen, self.COLOR_PERCEPTION_OBSTACLE, obs_rect, border_radius=4)
+                        pygame.draw.rect(screen, self.COLOR_PERCEPTION_BORDER, obs_rect, width=2, border_radius=4)
+                        pygame.draw.circle(screen, self.COLOR_PERCEPTION_GLOW, center_pt, 4)
+                        pygame.draw.circle(screen, (255, 255, 255), center_pt, 2)
+                        label = f"T{tid}" if tid is not None else f"{r},{c}"
+                    else:
+                        # Footprint / inflation perimeter cells: softer shade with thin border
+                        pygame.draw.rect(screen, (100, 30, 160), obs_rect, border_radius=4)
+                        pygame.draw.rect(screen, (190, 130, 250), obs_rect, width=1, border_radius=4)
+                        pygame.draw.circle(screen, (168, 85, 247), center_pt, 2)
+                        label = None
+
+                if label:
+                    try:
+                        lbl_surf = fonts.get("mono_small") or fonts.get("small")
+                        if lbl_surf:
+                            txt_surf = lbl_surf.render(label, True, (255, 255, 255))
+                            lx = px + (self.cell_size - txt_surf.get_width()) // 2
+                            ly = py + (self.cell_size - txt_surf.get_height()) // 2
+                            screen.blit(txt_surf, (lx, ly))
+                    except Exception:
+                        pass
 
             # Dynamic hazards ('O' key): Vibrant safety orange with amber border and warning bead
             elif (r, c) in self.dynamic_obstacle_set:
@@ -819,7 +898,7 @@ class RoadEnvironment:
         # ======================================================================
         # Card 1: Autonomous Navigation HUD
         # ======================================================================
-        card1_h = 188
+        card1_h = 175
         self._draw_panel_box(screen, card_x, curr_y, card_w, card1_h, "AUTONOMOUS NAVIGATION HUD")
 
         veh_r, veh_c = self.vehicle_pos
@@ -830,7 +909,7 @@ class RoadEnvironment:
         time_str = f"{self.planning_time_ms:.2f} ms" if self.planning_time_ms > 0 else "N/A"
 
         # Prominent Navigation State Banner / Badge
-        badge_rect = pygame.Rect(card_x + 12, curr_y + 25, card_w - 24, 20)
+        badge_rect = pygame.Rect(card_x + 12, curr_y + 24, card_w - 24, 20)
         if self.nav_mode == NavigationMode.AUTONOMOUS:
             badge_bg = (12, 74, 110)
             badge_border = (56, 189, 248)
@@ -879,20 +958,20 @@ class RoadEnvironment:
             ("Explored Search Cells:", explored_str, self.COLOR_TEXT_PRIMARY),
         ]
 
-        ty = curr_y + 50
+        ty = curr_y + 48
         for label, val, val_color in lines_telemetry:
             lbl_surf = fonts["small"].render(label, True, self.COLOR_TEXT_SECONDARY)
             val_surf = fonts["mono_small"].render(val, True, val_color)
             screen.blit(lbl_surf, (card_x + 14, ty))
             screen.blit(val_surf, (card_x + card_w - val_surf.get_width() - 14, ty))
-            ty += 19
+            ty += 17.5
 
-        curr_y += card1_h + 6
+        curr_y += card1_h + 5
 
         # ======================================================================
         # Card 2: Perception & Sensors Status
         # ======================================================================
-        card2_h = 126
+        card2_h = 168
         self._draw_panel_box(screen, card_x, curr_y, card_w, card2_h, "PERCEPTION & SENSORS")
 
         # 1. Webcam Stream Status
@@ -907,62 +986,103 @@ class RoadEnvironment:
 
         cam_lbl = fonts["small"].render("Webcam Feed:", True, self.COLOR_TEXT_SECONDARY)
         cam_val = fonts["mono_small"].render(webcam_status[:17], True, cam_color)
-        screen.blit(cam_lbl, (card_x + 14, curr_y + 24))
-        screen.blit(cam_val, (card_x + card_w - cam_val.get_width() - 14, curr_y + 24))
+        screen.blit(cam_lbl, (card_x + 14, curr_y + 22))
+        screen.blit(cam_val, (card_x + card_w - cam_val.get_width() - 14, curr_y + 22))
 
         # 2. YOLO Model Status
         model_upper = model_status.upper()
         mod_color = self.COLOR_ACCENT_GREEN if "READY" in model_upper or "LOADED" in model_upper else self.COLOR_OBSTACLE
         mod_lbl = fonts["small"].render("YOLO Model:", True, self.COLOR_TEXT_SECONDARY)
         mod_val = fonts["mono_small"].render(model_status, True, mod_color)
-        screen.blit(mod_lbl, (card_x + 14, curr_y + 43))
-        screen.blit(mod_val, (card_x + card_w - mod_val.get_width() - 14, curr_y + 43))
+        screen.blit(mod_lbl, (card_x + 14, curr_y + 39))
+        screen.blit(mod_val, (card_x + card_w - mod_val.get_width() - 14, curr_y + 39))
 
-        # 3. Vision Detections & Inference Latency
-        det_lbl = fonts["small"].render("Vision Detections:", True, self.COLOR_TEXT_SECONDARY)
+        # Retrieve perception statistics from mapping telemetry
+        telem = getattr(self, "perception_telemetry", {})
+        raw_det = telem.get("raw_detections", detection_count)
+        conf_tracks = telem.get("confirmed_tracks", 0)
+        mapped_objs = telem.get("mapped_objects", len(self.perception_track_map))
+        occ_cells = telem.get("occupied_cells", len(self.perception_obstacle_set))
+        rej_det = telem.get("rejected_detections", 0)
         lat_str = f"{inference_latency_ms:.1f}ms" if inference_latency_ms is not None else "--"
-        det_str = f"{detection_count} obj ({lat_str})"
-        det_color = self.COLOR_ACCENT_CYAN if detection_count > 0 else self.COLOR_TEXT_PRIMARY
+
+        # 3. Raw Vision Detections
+        det_lbl = fonts["small"].render("Raw Detections:", True, self.COLOR_TEXT_SECONDARY)
+        det_str = f"{raw_det} obj ({lat_str})"
+        det_color = self.COLOR_ACCENT_CYAN if raw_det > 0 else self.COLOR_TEXT_PRIMARY
         det_val = fonts["mono_small"].render(det_str, True, det_color)
-        screen.blit(det_lbl, (card_x + 14, curr_y + 62))
-        screen.blit(det_val, (card_x + card_w - det_val.get_width() - 14, curr_y + 62))
+        screen.blit(det_lbl, (card_x + 14, curr_y + 56))
+        screen.blit(det_val, (card_x + card_w - det_val.get_width() - 14, curr_y + 56))
 
-        # 4. Perception Mapping State
-        map_lbl = fonts["small"].render("Perception Mapping:", True, self.COLOR_TEXT_SECONDARY)
+        # 4. Confirmed Tracks
+        conf_lbl = fonts["small"].render("Confirmed Tracks:", True, self.COLOR_TEXT_SECONDARY)
+        conf_str = f"{conf_tracks} active" if self.perception_enabled else "N/A"
+        conf_color = self.COLOR_ACCENT_GREEN if conf_tracks > 0 else self.COLOR_TEXT_PRIMARY
+        conf_val = fonts["mono_small"].render(conf_str, True, conf_color)
+        screen.blit(conf_lbl, (card_x + 14, curr_y + 73))
+        screen.blit(conf_val, (card_x + card_w - conf_val.get_width() - 14, curr_y + 73))
+
+        # 5. Mapped Objects & Occupied Grid Cells
+        mapped_lbl = fonts["small"].render("Mapped Objects:", True, self.COLOR_TEXT_SECONDARY)
         if self.perception_enabled:
-            map_status_str = f"ON ({len(self.perception_obstacle_set)} cells)"
-            map_color = self.COLOR_ACCENT_GREEN
+            mapped_str = f"{mapped_objs} obj ({occ_cells} cells)"
+            mapped_color = self.COLOR_PERCEPTION_OBSTACLE if occ_cells > 0 else self.COLOR_TEXT_PRIMARY
         else:
-            map_status_str = "OFF (Press 'M')"
-            map_color = (156, 163, 175)
-        map_val = fonts["mono_small"].render(map_status_str, True, map_color)
-        screen.blit(map_lbl, (card_x + 14, curr_y + 81))
-        screen.blit(map_val, (card_x + card_w - map_val.get_width() - 14, curr_y + 81))
+            mapped_str = "OFF (Press 'M')"
+            mapped_color = (156, 163, 175)
+        mapped_val = fonts["mono_small"].render(mapped_str, True, mapped_color)
+        screen.blit(mapped_lbl, (card_x + 14, curr_y + 90))
+        screen.blit(mapped_val, (card_x + card_w - mapped_val.get_width() - 14, curr_y + 90))
 
-        # 5. Safety Invariant Guard
+        # 6. Plane Tracking (ArUco Dynamic vs Static)
+        calib_active = telem.get("aruco_active", False)
+        calib_count = telem.get("aruco_count", 0)
+        calib_lbl = fonts["small"].render("Plane Tracking:", True, self.COLOR_TEXT_SECONDARY)
+        if calib_active:
+            calib_str = "ARUCO (Dynamic)"
+            calib_col = self.COLOR_ACCENT_GREEN
+        elif calib_count > 0:
+            calib_str = f"ArUco {calib_count}/4 (Static)"
+            calib_col = self.COLOR_ACCENT_AMBER
+        else:
+            calib_str = "Static Homography"
+            calib_col = (148, 163, 184)
+        calib_val = fonts["mono_small"].render(calib_str, True, calib_col)
+        screen.blit(calib_lbl, (card_x + 14, curr_y + 107))
+        screen.blit(calib_val, (card_x + card_w - calib_val.get_width() - 14, curr_y + 107))
+
+        # 7. Rejected Detections Filtered
+        rej_lbl = fonts["small"].render("Rejected Detections:", True, self.COLOR_TEXT_SECONDARY)
+        rej_str = f"{rej_det} filtered" if self.perception_enabled else "0 filtered"
+        rej_color = (248, 113, 113) if rej_det > 0 else self.COLOR_TEXT_PRIMARY
+        rej_val = fonts["mono_small"].render(rej_str, True, rej_color)
+        screen.blit(rej_lbl, (card_x + 14, curr_y + 124))
+        screen.blit(rej_val, (card_x + card_w - rej_val.get_width() - 14, curr_y + 124))
+
+        # 8. Safety Invariant Guard
         guard_lbl = fonts["small"].render("Safety Guard:", True, self.COLOR_TEXT_SECONDARY)
         guard_val = fonts["mono_small"].render("Vehicle & Goal Safe", True, self.COLOR_ACCENT_GREEN)
-        screen.blit(guard_lbl, (card_x + 14, curr_y + 100))
-        screen.blit(guard_val, (card_x + card_w - guard_val.get_width() - 14, curr_y + 100))
+        screen.blit(guard_lbl, (card_x + 14, curr_y + 141))
+        screen.blit(guard_val, (card_x + card_w - guard_val.get_width() - 14, curr_y + 141))
 
-        curr_y += card2_h + 6
+        curr_y += card2_h + 5
 
         # ======================================================================
         # Card 3: Color Legend
         # ======================================================================
-        card3_h = 138
+        card3_h = 115
         self._draw_panel_box(screen, card_x, curr_y, card_w, card3_h, "TERRAIN & ROUTE LEGEND")
         legend_items = [
             (self.COLOR_VEHICLE, "Vehicle (Autonomous Agent)"),
             (self.COLOR_DESTINATION, "Target Navigation Destination"),
             (self.COLOR_OBSTACLE, "Static Hazards (Road Corridors)"),
             (self.COLOR_DYNAMIC_BORDER, "Dynamic Hazards ('O' Key)"),
-            (self.COLOR_PERCEPTION_OBSTACLE, "Perception Hazards (Vision/YOLO)"),
+            (self.COLOR_PERCEPTION_OBSTACLE, "Confirmed Perception Hazards"),
+            ((180, 83, 9), "Unconfirmed / Footprint Cells"),
             (self.COLOR_PATH, "Planned Route (A* Path)"),
-            (self.COLOR_DRIVABLE_ROAD, "Drivable Unstructured Road"),
         ]
 
-        ly = curr_y + 24
+        ly = curr_y + 22
         for color, name in legend_items:
             swatch_rect = pygame.Rect(card_x + 14, ly + 2, 11, 11)
             pygame.draw.rect(screen, color, swatch_rect, border_radius=3)
@@ -970,33 +1090,35 @@ class RoadEnvironment:
 
             name_surf = fonts["small"].render(name, True, self.COLOR_TEXT_PRIMARY)
             screen.blit(name_surf, (card_x + 32, ly))
-            ly += 15
+            ly += 13.5
 
-        curr_y += card3_h + 6
+        curr_y += card3_h + 5
 
         # ======================================================================
         # Card 4: Keyboard Controls Guide
         # ======================================================================
-        card4_h = 144
+        card4_h = 135
         self._draw_panel_box(screen, card_x, curr_y, card_w, card4_h, "KEYBOARD SHORTCUTS")
         controls = [
             ("SPACE", "Start / Pause autonomous"),
             ("M Key", "Toggle perception mapping"),
+            ("H Key", "Toggle Homography / ROI mode"),
+            ("B Key", "Toggle calibration guide"),
+            ("K Key", "Toggle contact point (bot/center)"),
             ("T Key", "Toggle Custom / COCO model"),
             ("O Key", "Insert dynamic hazard"),
             ("P Key", "Compute / refresh route"),
             ("R Key", "Reset vehicle & hazards"),
             ("W/A/S/D", "Manual step (when inactive)"),
-            ("C / ESC", "Webcam feed / Safe exit"),
         ]
 
-        cy = curr_y + 23
+        cy = curr_y + 20
         for key_str, desc in controls:
             k_surf = fonts["mono_small"].render(key_str, True, self.COLOR_ACCENT_AMBER)
             d_surf = fonts["small"].render(desc, True, self.COLOR_TEXT_SECONDARY)
             screen.blit(k_surf, (card_x + 14, cy))
-            screen.blit(d_surf, (card_x + 85, cy))
-            cy += 14
+            screen.blit(d_surf, (card_x + 80, cy))
+            cy += 11.2
 
     def _render_footer(self, screen: pygame.Surface, fonts: dict) -> None:
         """Render status action feedback bar at the bottom."""
@@ -1025,7 +1147,10 @@ class RoadEnvironment:
         pygame.draw.rect(screen, self.COLOR_PANEL_BORDER, rect, 1)
 
         # Title banner
-        header_font = pygame.font.SysFont("Helvetica", 11, bold=True)
+        try:
+            header_font = pygame.font.SysFont("Helvetica", 11, bold=True)
+        except Exception:
+            header_font = pygame.font.Font(None, 14)
         t_surf = header_font.render(title, True, self.COLOR_TEXT_SECONDARY)
         screen.blit(t_surf, (x + 14, y + 7))
         pygame.draw.line(screen, self.COLOR_PANEL_BORDER, (x + 10, y + 22), (x + w - 10, y + 22), 1)

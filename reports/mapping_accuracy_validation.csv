@@ -1,0 +1,19 @@
+phase,point_id,point_name,expected_x_cm,expected_y_cm,detected_u_px,detected_v_px,transformed_x_cm,transformed_y_cm,position_error_cm,expected_row,expected_col,actual_row,actual_col,grid_cell_error,status,footprint_span,validation,description
+Part A: Homography Pipeline,1,Corner 1: Top-Left (TL),0.0,0.0,100.0,120.0,0.0,0.0,0.0,0,0,0,0,0.0,ACCEPTED,1x1 (Point),PASS,Origin reference fiducial P1 (Far-Left)
+Part A: Homography Pipeline,2,Corner 2: Top-Right (TR),100.0,0.0,540.0,120.0,100.0,0.0,0.0,0,25,0,25,0.0,ACCEPTED,1x1 (Point),PASS,Right boundary fiducial P2 (Far-Right)
+Part A: Homography Pipeline,3,Corner 3: Bottom-Right (BR),100.0,80.0,580.0,440.0,100.0,80.0,0.0,21,25,21,25,0.0,ACCEPTED,1x1 (Point),PASS,Near-Right boundary fiducial P3
+Part A: Homography Pipeline,4,Corner 4: Bottom-Left (BL),0.0,80.0,60.0,440.0,0.0,80.0,0.0,21,0,21,0,0.0,ACCEPTED,1x1 (Point),PASS,Near-Left boundary fiducial P4
+Part A: Homography Pipeline,5,Edge Midpoint 5: Top Edge,50.0,0.0,320.0,120.0,50.0,0.0,0.0,0,13,0,13,0.0,ACCEPTED,1x1 (Point),PASS,Far boundary lateral midpoint
+Part A: Homography Pipeline,6,Edge Midpoint 6: Bottom Edge,50.0,80.0,320.0,440.0,50.0,80.0,0.0,21,13,21,13,0.0,ACCEPTED,1x1 (Point),PASS,Near boundary lateral midpoint
+Part A: Homography Pipeline,7,Edge Midpoint 7: Left Edge,0.0,40.0,81.67,266.67,0.0,40.0,0.0,11,0,11,0,0.0,ACCEPTED,1x1 (Point),PASS,Left lateral longitudinal midpoint
+Part A: Homography Pipeline,8,Edge Midpoint 8: Right Edge,100.0,40.0,558.33,266.67,100.0,40.0,0.0,11,25,11,25,0.0,ACCEPTED,1x1 (Point),PASS,Right lateral longitudinal midpoint
+Part A: Homography Pipeline,9,Center Point 9: Geometric Center,50.0,40.0,320.0,266.67,50.0,40.0,0.0,11,13,11,13,0.0,ACCEPTED,1x1 (Point),PASS,Calibrated surface intersection center
+Part B: Physical Box Perception,1,Corner 1: Top-Left (TL),5.0,0.0,122,120,5.0,0.0,0.0,0,1,0,1,0.0,CONFIRMED,6 cell(s) (W:10.0cm),PASS,Physical box footprint 10.0x10.0cm
+Part B: Physical Box Perception,2,Corner 2: Top-Right (TR),95.0,0.0,518,120,95.0,0.0,0.0,0,24,0,24,0.0,CONFIRMED,6 cell(s) (W:10.0cm),PASS,Physical box footprint 10.0x10.0cm
+Part B: Physical Box Perception,3,Corner 3: Bottom-Right (BR),95.0,80.0,554,440,95.0,80.0,0.0,21,24,21,24,0.0,CONFIRMED,6 cell(s) (W:10.0cm),PASS,Physical box footprint 10.0x10.0cm
+Part B: Physical Box Perception,4,Corner 4: Bottom-Left (BL),5.0,80.0,86,440,5.0,80.0,0.0,21,1,21,1,0.0,CONFIRMED,6 cell(s) (W:10.0cm),PASS,Physical box footprint 10.0x10.0cm
+Part B: Physical Box Perception,5,Edge Midpoint 5: Top Edge,50.0,0.0,320,120,50.0,0.0,0.0,0,13,0,13,0.0,CONFIRMED,8 cell(s) (W:10.0cm),PASS,Physical box footprint 10.0x10.0cm
+Part B: Physical Box Perception,6,Edge Midpoint 6: Bottom Edge,50.0,80.0,320,440,50.0,80.0,0.0,21,13,21,13,0.0,CONFIRMED,8 cell(s) (W:10.0cm),PASS,Physical box footprint 10.0x10.0cm
+Part B: Physical Box Perception,7,Edge Midpoint 7: Left Edge,5.0,40.0,106,267,5.11,40.08,0.136,11,1,11,1,0.0,CONFIRMED,12 cell(s) (W:9.9cm),PASS,Physical box footprint 10.0x10.0cm
+Part B: Physical Box Perception,8,Edge Midpoint 8: Right Edge,95.0,40.0,534,267,94.89,40.08,0.136,11,24,11,24,0.0,CONFIRMED,12 cell(s) (W:9.9cm),PASS,Physical box footprint 10.0x10.0cm
+Part B: Physical Box Perception,9,Center Point 9: Geometric Center,50.0,40.0,320,267,50.0,40.08,0.08,11,13,11,13,0.0,CONFIRMED,16 cell(s) (W:10.1cm),PASS,Physical box footprint 10.0x10.0cm

@@ -93,10 +93,17 @@ def initialize_fonts() -> dict:
     pygame.font.init()
 
     # Fallback to system fonts available cross-platform (macOS, Linux, Windows)
-    title_font = pygame.font.SysFont(["Arial", "DejaVu Sans", "Helvetica"], 22, bold=True)
-    regular_font = pygame.font.SysFont(["Arial", "DejaVu Sans", "Helvetica"], 14)
-    small_font = pygame.font.SysFont(["Arial", "DejaVu Sans", "Helvetica"], 12)
-    mono_small = pygame.font.SysFont(["Menlo", "Courier New", "Consolas"], 12, bold=True)
+    try:
+        title_font = pygame.font.SysFont(["Arial", "DejaVu Sans", "Helvetica"], 22, bold=True)
+        regular_font = pygame.font.SysFont(["Arial", "DejaVu Sans", "Helvetica"], 14)
+        small_font = pygame.font.SysFont(["Arial", "DejaVu Sans", "Helvetica"], 12)
+        mono_small = pygame.font.SysFont(["Menlo", "Courier New", "Consolas"], 12, bold=True)
+    except Exception as exc:
+        logger.debug("Falling back to default pygame font: %s", exc)
+        title_font = pygame.font.Font(None, 24)
+        regular_font = pygame.font.Font(None, 16)
+        small_font = pygame.font.Font(None, 14)
+        mono_small = pygame.font.Font(None, 14)
 
     return {
         "title": title_font,
@@ -134,16 +141,21 @@ def main() -> None:
     pygame_h = RoadEnvironment.WINDOW_HEIGHT  # 700
 
     # Calculate non-overlapping side-by-side coordinates for the OpenCV sensor feed window
-    if disp_w >= 1420:
+    if disp_w >= 1680:
         cv_x = pygame_w + 20
         cv_y = 40
-        cv_w = min(400, disp_w - cv_x - 10)
-        cv_h = int(cv_w * 0.75)
-    else:
-        cv_x = max(0, disp_w - 410)
+        cv_w = 640
+        cv_h = 520
+    elif disp_w >= 1440:
+        cv_x = pygame_w + 15
         cv_y = 40
-        cv_w = 400
-        cv_h = 300
+        cv_w = min(640, max(460, disp_w - cv_x - 10))
+        cv_h = int(cv_w * 0.80)
+    else:
+        cv_x = max(0, disp_w - 530)
+        cv_y = 40
+        cv_w = min(520, disp_w)
+        cv_h = 420
 
     # Instantiate Environment, Perception Manager, Detector, and Grid Mapper
     env = RoadEnvironment()
@@ -204,6 +216,7 @@ def main() -> None:
     last_tracks = []
     last_telemetry = {}
     last_inf_ms = None
+    last_mapping_res = None
 
     # Simultaneous Dual-Window Operation:
     # If mapping is enabled, start camera and mapping
@@ -246,6 +259,10 @@ def main() -> None:
             if cv_key is not None:
                 if cv_key in (ord('m'), ord('M')):
                     events_to_process.append(pygame.K_m)
+                elif cv_key in (ord('h'), ord('H')):
+                    events_to_process.append(pygame.K_h)
+                elif cv_key in (ord('k'), ord('K')):
+                    events_to_process.append(pygame.K_k)
                 elif cv_key in (ord('p'), ord('P')):
                     events_to_process.append(pygame.K_p)
                 elif cv_key == ord(' '):
@@ -258,6 +275,8 @@ def main() -> None:
                     events_to_process.append(pygame.K_o)
                 elif cv_key in (ord('c'), ord('C')):
                     events_to_process.append(pygame.K_c)
+                elif cv_key in (ord('b'), ord('B')):
+                    events_to_process.append(pygame.K_b)
                 elif cv_key in (ord('w'), ord('W')):
                     events_to_process.append(pygame.K_w)
                 elif cv_key in (ord('s'), ord('S')):
@@ -348,12 +367,36 @@ def main() -> None:
                     last_tracks = []
                     last_telemetry = {}
                     last_inf_ms = None
+                    last_mapping_res = None
                     logger.info("Vehicle, dynamic hazards, perception cells, and route reset to initial state.")
+
+                # Toggle Perception Mapping Mode (Planar Homography <-> Normalized ROI): H Key
+                elif key == pygame.K_h:
+                    new_mode = mapper.toggle_mode()
+                    mode_lbl = "Homography (Calibrated)" if new_mode.startswith("Planar") else "Normalized ROI (Full View)"
+                    env.last_action_msg = f"Perception Mode: {mode_lbl}"
+                    env.last_action_status = "normal"
+                    logger.info("Perception mapping mode switched to: %s", mode_lbl)
+
+                # Toggle Ground Contact Point mode (bottom_center <-> center <-> smart): K Key
+                elif key == pygame.K_k:
+                    new_contact = mapper.toggle_contact_point()
+                    env.last_action_msg = f"Contact Point: {new_contact.upper()}"
+                    env.last_action_status = "normal"
+                    logger.info("Contact point mode switched to: %s", new_contact)
 
                 # Toggle OpenCV webcam preview
                 elif key == pygame.K_c:
                     is_active = webcam.toggle_preview()
                     logger.info("Webcam toggled: active=%s (%s, state=%s)", is_active, webcam.device_name, webcam.get_state().value)
+
+                # Toggle Calibration Instructions & Guidelines: B Key
+                elif key == pygame.K_b:
+                    calibrator.show_instructions = not calibrator.show_instructions
+                    status_str = "ON" if calibrator.show_instructions else "OFF"
+                    env.last_action_msg = f"Calibration Overlay: {status_str}"
+                    env.last_action_status = "normal"
+                    logger.info("Toggled calibration instructions: %s", calibrator.show_instructions)
 
             # 3. Update Autonomous Navigation & Timing
             env.update(dt_ms)
@@ -364,6 +407,10 @@ def main() -> None:
             if webcam.is_active():
                 raw_frame = webcam.get_current_frame()
                 if raw_frame is not None:
+                    # Real-time ArUco dynamic auto-calibration tracking & resolution adaptation
+                    calibrator.detect_and_update_aruco(raw_frame)
+                    calibrator.adapt_to_resolution(raw_frame.shape[1], raw_frame.shape[0])
+
                     perception_timer_ms += dt_ms
                     if perception_timer_ms >= perception_interval_ms:
                         perception_timer_ms = 0
@@ -378,7 +425,23 @@ def main() -> None:
                                 vehicle_pos=env.vehicle_pos,
                                 goal_pos=env.destination_pos
                             )
-                            env.set_perception_obstacles(mapping_res.final_cells)
+                            last_mapping_res = mapping_res
+                            env.set_perception_obstacles(
+                                mapping_res.final_cells,
+                                track_map=mapping_res.cell_to_track_id,
+                                primary_cells=mapping_res.candidate_cells,
+                                status_map=mapping_res.cell_to_status,
+                                telemetry={
+                                    "raw_detections": mapping_res.raw_detections_count,
+                                    "confirmed_tracks": mapping_res.confirmed_tracks_count,
+                                    "mapped_objects": mapping_res.mapped_objects_count,
+                                    "occupied_cells": len(mapping_res.final_cells),
+                                    "rejected_detections": mapping_res.rejected_detections_count,
+                                    "inference_latency_ms": last_inf_ms,
+                                    "aruco_active": calibrator.is_aruco_tracking,
+                                    "aruco_count": calibrator.aruco_detected_count,
+                                }
+                            )
                             if len(mapping_res.final_cells) > 0:
                                 mode_tag = "Homography" if mapping_res.mapping_mode.startswith("Planar") else "ROI"
                                 env.last_action_msg = f"Perception [{mode_tag}]: {len(mapping_res.final_cells)} cell(s) mapped: {sorted(list(mapping_res.final_cells))[:2]}"
@@ -395,13 +458,32 @@ def main() -> None:
                         show_velocity=True,
                         telemetry=last_telemetry
                     )
-                    display_frame = calibrator.draw_calibration_overlay(display_frame, show_fiducials=True)
+                    if mapper.mapping_mode.startswith("Planar"):
+                        display_frame = calibrator.draw_calibration_overlay(display_frame, show_fiducials=True)
+                    display_frame = mapper.draw_mapping_hud(
+                        frame=display_frame,
+                        tracks=last_tracks,
+                        mapping_result=last_mapping_res
+                    )
 
             elif env.perception_enabled:
                 # Camera inactive: prune any stale detections whose timeout elapsed
                 active_cells = mapper.prune_stale_cells(time.time())
                 if len(active_cells) != len(env.perception_obstacle_set):
-                    env.set_perception_obstacles(active_cells)
+                    env.set_perception_obstacles(
+                        active_cells,
+                        track_map=mapper._cell_to_track_id,
+                        primary_cells=active_cells,
+                        status_map=mapper._cell_to_status,
+                        telemetry={
+                            "raw_detections": 0,
+                            "confirmed_tracks": sum(1 for s in mapper._track_status.values() if s == "CONFIRMED"),
+                            "mapped_objects": len(mapper._track_to_cells),
+                            "occupied_cells": len(active_cells),
+                            "rejected_detections": 0,
+                            "inference_latency_ms": 0.0,
+                        }
+                    )
 
             # Render frame in OpenCV window with annotated detections
             webcam.update(display_frame=display_frame)
